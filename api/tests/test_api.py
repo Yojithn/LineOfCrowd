@@ -33,6 +33,32 @@ def test_report_sets_density_and_status():
     assert state["overall"] == "critical"
 
 
+def test_density_uses_tracked_count_and_keeps_raw_detections_separate():
+    response = report(count=9, raw_detection_count=12)
+    assert response.status_code == 200
+    gate = next(z for z in client.get("/api/state").json()["zones"] if z["id"] == "gate")
+    assert gate["count"] == 9
+    assert gate["raw_detection_count"] == 12
+    assert gate["density"] == 0.5
+    assert gate["density_method"] == "tracked_people_per_configured_m2"
+    assert gate["density_calibration"] == "uncalibrated_approximation"
+
+
+def test_distinct_zone_areas_do_not_overwrite_each_other():
+    report("gate", 18)
+    report("stage", 30)
+    zones = {z["id"]: z for z in client.get("/api/state").json()["zones"]}
+    assert zones["gate"]["area_m2"] == 18 and zones["gate"]["density"] == 1.0
+    assert zones["stage"]["area_m2"] == 30 and zones["stage"]["density"] == 1.0
+
+
+def test_missing_camera_reading_is_offline_with_empty_measurement():
+    zones = {z["id"]: z for z in client.get("/api/state").json()["zones"]}
+    assert zones["exit"]["offline"] is True
+    assert zones["exit"]["density"] == 0.0
+    assert zones["exit"]["raw_detection_count"] is None
+
+
 def test_unknown_zone_is_rejected():
     assert report(zone="moon").status_code == 404
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Iterable, Optional, Sequence
 
 
@@ -12,9 +13,9 @@ class Thresholds:
 
 
 def density(count: int, area_m2: float) -> float:
-    """People per square metre in the camera's view."""
-    if area_m2 <= 0:
-        raise ValueError("area_m2 must be positive")
+    """Approximate people per configured square metre of camera coverage."""
+    if not math.isfinite(area_m2) or area_m2 <= 0:
+        raise ValueError("area_m2 must be a finite positive value")
     return round(max(count, 0) / area_m2, 2)
 
 

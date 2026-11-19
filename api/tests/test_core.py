@@ -13,6 +13,8 @@ def test_density_is_people_per_square_metre():
 def test_density_rejects_bad_area():
     with pytest.raises(ValueError):
         core.density(10, 0)
+    with pytest.raises(ValueError):
+        core.density(10, float("nan"))
 
 
 @pytest.mark.parametrize("d,expected", [(0.5, "safe"), (1.99, "safe"), (2.0, "warning"), (3.9, "warning"), (4.0, "critical"), (6, "critical")])

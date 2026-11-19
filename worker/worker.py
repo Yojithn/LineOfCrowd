@@ -20,7 +20,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from tracker import CentroidTracker, flow_stats
+from tracker import CentroidTracker, CounterflowPersistence, flow_stats
 
 ZONE = os.getenv("ZONE", "gate")
 API_URL = os.getenv("API_URL", "http://localhost:8080").rstrip("/")
@@ -33,6 +33,10 @@ VERSION = os.getenv("APP_VERSION", "v1")
 BROKEN = os.getenv("BROKEN", "0").lower() in ("1", "true", "yes")
 FORCE_SIM = os.getenv("SIM", "0").lower() in ("1", "true", "yes")
 AUTOSURGE = float(os.getenv("SIM_AUTOSURGE", "0"))
+FLOW_MIN_SPEED = float(os.getenv("FLOW_MIN_SPEED", "0.01"))
+FLOW_MIN_MOVING = int(os.getenv("FLOW_MIN_MOVING", "4"))
+FLOW_MIN_STREAM_FRACTION = float(os.getenv("FLOW_MIN_STREAM_FRACTION", "0.25"))
+FLOW_CONE_DEGREES = float(os.getenv("FLOW_CONE_DEGREES", "35"))
 POD = os.getenv("POD_NAME", socket.gethostname())
 HEARTBEAT = Path(os.getenv("HEARTBEAT_FILE", "/tmp/heartbeat" if os.name != "nt" else "heartbeat.txt"))
 SEND_W = int(os.getenv("FRAME_WIDTH", "480"))
@@ -167,6 +171,7 @@ def main() -> None:
         log(f"No video for '{ZONE}', using the simulated feed (area {area} m²)")
 
     tracker = CentroidTracker()
+    counterflow = CounterflowPersistence(threshold_s=float(os.getenv("COUNTERFLOW_PERSISTENCE_S", "3")))
     status = "safe"
     interval = 1.0 / FPS
     last = time.time()
@@ -184,10 +189,13 @@ def main() -> None:
             infer_ms = 0.0
         h, w = frame.shape[:2]
         tracks = tracker.update(boxes, w, h, dt)
-        flow = flow_stats(tracks)
+        flow = counterflow.update(flow_stats(tracks, min_speed=FLOW_MIN_SPEED, min_moving=FLOW_MIN_MOVING,
+                                             min_stream_fraction=FLOW_MIN_STREAM_FRACTION,
+                                             cone_degrees=FLOW_CONE_DEGREES), dt)
         jpg = cv2.imencode(".jpg", draw(frame, tracks, status), [cv2.IMWRITE_JPEG_QUALITY, 70])[1]
         payload = {
-            "zone": ZONE, "count": len(boxes), "pod": POD, "version": VERSION, "sim": detector is None,
+            "zone": ZONE, "count": len(tracks), "raw_detection_count": len(boxes),
+            "pod": POD, "version": VERSION, "sim": detector is None,
             "fps": round(1 / max(dt, 1e-3), 2), "infer_ms": round(infer_ms, 1), "flow": flow,
             # Detections in letterbox padding can have a centre outside the image.
             "points": [[round(t.x, 3), round(t.y, 3), round(t.vx, 3), round(t.vy, 3)]

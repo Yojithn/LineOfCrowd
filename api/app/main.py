@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import math
 import os
 import socket
 import threading
@@ -36,6 +37,9 @@ STATIC = BASE.parent / "static"
 CONFIG = json.loads((BASE / "zones.json").read_text(encoding="utf-8"))
 DEFAULT_T = core.Thresholds(**CONFIG["thresholds"])
 ZONES = {z["id"]: z for z in CONFIG["zones"]}
+for _zone in CONFIG["zones"]:
+    if not isinstance(_zone.get("area_m2"), (int, float)) or not math.isfinite(_zone["area_m2"]) or _zone["area_m2"] <= 0:
+        raise ValueError(f"Zone {_zone.get('id', '<unknown>')} must have a finite positive area_m2")
 OFFLINE_AFTER = float(CONFIG.get("offline_after_s", 4))
 SERIES_STEP_S = 2.0            # replay resolution
 SERIES_LEN = int(15 * 60 / SERIES_STEP_S)   # 15 minutes of replay
@@ -146,10 +150,13 @@ def _zone_view(z: dict, now: float, t: core.Thresholds) -> dict:
         "id": z["id"],
         "name": z["name"],
         "area_m2": z["area_m2"],
+        "density_method": "tracked_people_per_configured_m2",
+        "density_calibration": z.get("density_calibration", "uncalibrated_approximation"),
         "tip": z["tip"],
         "offline": offline,
         "last_seen": rec["ts"] if rec else None,
         "count": rec["count"] if rec else 0,
+        "raw_detection_count": rec.get("raw_detection_count", rec["count"]) if rec else None,
         "density": rec["density"] if rec else 0.0,
         "status": "offline" if offline else rec["status"],
         "version": rec.get("version") if rec else None,
@@ -378,10 +385,13 @@ def report(r: Report, request: Request):
         raise HTTPException(422, str(exc)) from None
     t = thresholds()
     now = time.time()
+    if not isinstance(z.get("area_m2"), (int, float)) or not math.isfinite(z["area_m2"]) or z["area_m2"] <= 0:
+        raise HTTPException(503, "Zone density area is not configured as a positive square-metre value.")
     d = core.density(r.count, z["area_m2"])
     st = core.status_for(d, t)
     rec = {
-        "ts": now, "count": r.count, "density": d, "status": st, "pod": r.pod,
+        "ts": now, "count": r.count, "raw_detection_count": r.raw_detection_count if r.raw_detection_count is not None else r.count,
+        "density": d, "status": st, "pod": r.pod,
         "version": r.version, "sim": r.sim, "fps": r.fps, "infer_ms": r.infer_ms,
         "flow": r.flow.model_dump(), "points": r.points,
     }
@@ -413,7 +423,7 @@ def report(r: Report, request: Request):
         _on_status_change(z, prev, st, d, r.count)
     if st == "critical":
         _track_peak(z, d, r.count)
-    if r.flow.counterflow >= 0.65 and r.flow.moving >= 6 and d >= t.warning:
+    if r.flow.counterflow_confirmed and r.flow.state == "counterflow" and r.flow.moving >= 6 and d >= t.warning:
         if R.set(f"cf:{z['id']}", 1, nx=True, ex=30):
             add_event("warning", f"Counter-flow at {z['name']}: groups are pushing in opposite directions.", z["id"])
 
