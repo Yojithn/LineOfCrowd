@@ -1,13 +1,9 @@
 import base64
-import os
-
-os.environ.pop("REDIS_URL", None)  # use the in-process fake Redis
-
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app, R  # noqa: E402
 
-client = TestClient(app)
+client = TestClient(app, headers={"Authorization": "Bearer test-operator-key"})
 
 
 def setup_function():
@@ -17,7 +13,7 @@ def setup_function():
 def report(zone="gate", count=10, **extra):
     body = {"zone": zone, "count": count, "pod": f"worker-{zone}-abc", "version": "v1"}
     body.update(extra)
-    return client.post("/api/report", json=body)
+    return client.post("/api/report", json=body, headers={"Authorization": "Bearer test-worker-key"})
 
 
 def test_health_and_config():
@@ -70,7 +66,8 @@ def test_chaos_kill_in_local_mode_signals_worker_once():
 
 def test_pipeline_rollback_is_recorded():
     for stage, st in [("build", "ok"), ("deploy", "ok"), ("health", "fail"), ("rollback", "ok")]:
-        client.post("/api/pipeline", json={"run": "r1", "version": "v3", "previous": "v2", "stage": stage, "state": st})
+        client.post("/api/pipeline", json={"run": "r1", "version": "v3", "previous": "v2", "stage": stage, "state": st},
+                    headers={"X-Pipeline-Token": "test-pipeline-key"})
     p = client.get("/api/state").json()["pipeline"]
     assert p["result"] == "rolled_back"
     assert p["stages"]["health"]["state"] == "fail"

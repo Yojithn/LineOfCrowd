@@ -14,6 +14,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 import cv2
@@ -23,6 +24,7 @@ from tracker import CentroidTracker, flow_stats
 
 ZONE = os.getenv("ZONE", "gate")
 API_URL = os.getenv("API_URL", "http://localhost:8080").rstrip("/")
+WORKER_KEY = os.getenv("WORKER_API_KEY", "")
 VIDEO = os.getenv("VIDEO", f"videos/{ZONE}.mp4")
 FPS = float(os.getenv("FPS", "2"))
 CONF = float(os.getenv("CONF", "0.35"))
@@ -38,15 +40,26 @@ SEND_W = int(os.getenv("FRAME_WIDTH", "480"))
 COLORS = {"safe": (168, 214, 62), "warning": (28, 159, 255), "critical": (74, 56, 240), "offline": (190, 146, 140)}
 
 
-def log(msg: str) -> None:
-    print(f"[{time.strftime('%H:%M:%S')}] [{ZONE}] {msg}", flush=True)
+def log(msg: str, *, severity: str = "INFO", event: str = "worker", **context) -> None:
+    print(json.dumps({"timestamp": datetime.now(timezone.utc).isoformat(), "severity": severity,
+                      "event": event, "zone": ZONE, "pod": POD, "message": msg, **context}), flush=True)
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_HTTP = urllib.request.build_opener(NoRedirect())
 
 
 def http_json(method: str, path: str, body: dict | None = None, timeout: float = 2.0) -> dict:
-    data = json.dumps(body).encode() if body is not None else None
+    data = json.dumps(body, allow_nan=False).encode() if body is not None else None
     req = urllib.request.Request(API_URL + path, data=data, method=method,
                                  headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    if path == "/api/report":
+        req.add_unredirected_header("Authorization", f"Bearer {WORKER_KEY}")
+    with _HTTP.open(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode() or "{}")
 
 
@@ -62,7 +75,8 @@ def zone_settings() -> tuple[float, float]:
             break
         except Exception as exc:
             if attempt % 5 == 0:
-                log(f"Waiting for API at {API_URL} ({exc.__class__.__name__})")
+                log("Waiting for API configuration", severity="WARNING", event="config_request_failure",
+                    error_type=type(exc).__name__)
             time.sleep(1)
     return 20.0, 4.0
 
@@ -128,6 +142,9 @@ def beat() -> None:
 
 
 def main() -> None:
+    if not WORKER_KEY:
+        log("WORKER_API_KEY is required", severity="ERROR", event="worker_configuration_failure")
+        sys.exit(2)
     log(f"Starting camera worker {VERSION} on pod {POD}")
     if BROKEN:
         # Used to rehearse a bad release: the new version cannot load its model.
@@ -172,12 +189,16 @@ def main() -> None:
         payload = {
             "zone": ZONE, "count": len(boxes), "pod": POD, "version": VERSION, "sim": detector is None,
             "fps": round(1 / max(dt, 1e-3), 2), "infer_ms": round(infer_ms, 1), "flow": flow,
-            "points": [[round(t.x, 3), round(t.y, 3), round(t.vx, 3), round(t.vy, 3)] for t in tracks[:150]],
+            # Detections in letterbox padding can have a centre outside the image.
+            "points": [[round(t.x, 3), round(t.y, 3), round(t.vx, 3), round(t.vy, 3)]
+                       for t in tracks[:150] if 0 <= t.x <= 1 and 0 <= t.y <= 1],
             "frame": base64.b64encode(jpg.tobytes()).decode(),
         }
         try:
             resp = http_json("POST", "/api/report", payload)
             status = resp.get("status", status)
+            if failures:
+                log("API reporting restored", event="reporting_recovered", failures=failures)
             failures = 0
             if resp.get("kill"):
                 log("Chaos test: received a kill signal. Crashing now so the platform can restart me.")
@@ -185,10 +206,13 @@ def main() -> None:
             if resp.get("surge") and not detector:
                 log("Surge drill started")
                 cam.surge()
-        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
+        except (OSError, ValueError) as exc:
             failures += 1
             if failures in (1, 10) or failures % 60 == 0:
-                log(f"Could not reach API ({exc.__class__.__name__}); still watching, will retry")
+                http_status = exc.code if isinstance(exc, urllib.error.HTTPError) else None
+                log("Camera report failed. Processing continues with the next frame.",
+                    severity="WARNING", event="reporting_failure",
+                    error_type=type(exc).__name__, http_status=http_status, failures=failures)
         beat()
         time.sleep(max(0.0, interval - (time.time() - started)))
 

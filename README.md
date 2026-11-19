@@ -80,9 +80,24 @@ Counts look too low or high? Change `area_m2` for that zone in `api\app\zones.js
 
 ## 3. Run it on Kubernetes (the main demo)
 
+Set the local demo credentials in PowerShell before bringing up Kubernetes or Compose.
+Generate these once for the session and keep the values private.
+
+```powershell
+$env:WORKER_API_KEY = python -c "import secrets; print(secrets.token_urlsafe(32))"
+$env:OPERATOR_API_KEY = python -c "import secrets; print(secrets.token_urlsafe(32))"
+$env:PIPELINE_TOKEN = python -c "import secrets; print(secrets.token_urlsafe(32))"
+$env:APP_ENV = "development"
+$env:ENABLE_CHAOS = "1" # Optional for the crash, delete-pod and surge drills
+```
+
 ```powershell
 python scripts\cs.py up
 ```
+
+The setup script supplies the credentials through the `api-auth` Kubernetes Secret and the demo
+flags through the `api-config` ConfigMap. For an existing cluster, run `up` once with matching
+credentials before using the rolling-release command so the deployments receive the new configuration.
 
 The first run takes about 5–10 minutes (it creates the cluster and builds the images). Later runs are
 quick. When it finishes it prints two addresses:
@@ -103,6 +118,38 @@ python scripts\cs.py down          # delete the cluster
 **Plan B (no Kubernetes):** `docker compose up --build`, then open http://localhost:8080.
 Everything works, and crashed cameras are restarted by Docker instead of Kubernetes.
 Run `python scripts\cs.py down` first if the cluster is using port 8080.
+
+### Operator sign-in and API configuration
+
+Open `/api/operator` in a browser tab on the **same origin** as the dashboard or phone page
+(for example, http://localhost:8080/api/operator). In the browser prompt, use `operator` as the
+username and the value of `OPERATOR_API_KEY` as the password. Return to the dashboard or phone page
+after the confirmation. Each browser needs its own sign-in for settings changes, incident actions,
+or enabled drills. The browser session expires after eight hours. Public monitoring, including
+camera frames, replay, and the live stream, remains accessible without a sign-in.
+
+| Setting | Purpose |
+|---|---|
+| `WORKER_API_KEY` | Give the same value to the API and camera workers. Workers send `Authorization: Bearer <worker key>` on `POST /api/report`. |
+| `OPERATOR_API_KEY` | Give this separate value to the API and trusted operators. API clients use `Authorization: Bearer <operator key>` for settings writes, incident actions, and enabled drills. |
+| `PIPELINE_TOKEN` | Set a third value on the API and in the release CLI environment or GitHub Actions secret of the same name. The CLI sends `X-Pipeline-Token`. Pipeline writes are closed when this value is absent. |
+| `APP_ENV`, `ENABLE_CHAOS` | The API defaults to production and refuses to start without both role keys. Chaos routes are available only with `APP_ENV=development` and `ENABLE_CHAOS=1`. Authentication applies in development too. |
+| `MAX_PERSON_COUNT`, `MAX_FRAME_BYTES` | API limits for the camera count and decoded JPEG size. Defaults are 10,000 people and 524,288 bytes. The JSON body also has a cap based on the encoded frame limit plus 32 KiB for metadata. |
+
+Supply distinct randomly generated credentials through the environment or your secret manager.
+Use HTTPS for production dashboard and worker traffic. If TLS terminates at a reverse proxy,
+configure Uvicorn to trust forwarded headers from that proxy so browser origin checks see the
+public HTTPS origin. Keep public read endpoints behind network access controls if feeds or incident
+details are sensitive. A shared worker key authorizes reporting, while Compose and Kubernetes
+check that the reported worker name belongs to the selected zone.
+
+Camera reports are JSON. `zone`, integer `count`, `pod` and `version` are required. Numeric
+metrics must be finite, position points contain `[x, y, vx, vy]` with normalized coordinates, and
+optional frames use standard base64 JPEG. Unknown zones return `404`, malformed JSON returns
+`400`, invalid fields or frames return `422`, and reports above the body limit return `413`.
+Requests that need Redis return `503` when the service is unavailable. Workers continue with the
+next frame after a failure. Avoid automatically replaying a failed write because the datastore may
+have applied it before the connection failed.
 
 ### Using the control room
 

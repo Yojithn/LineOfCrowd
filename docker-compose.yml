@@ -12,6 +12,10 @@ x-worker: &worker
     timeout: 3s
     retries: 3
 
+x-worker-env: &worker-env
+  API_URL: http://api:8080
+  WORKER_API_KEY: ${WORKER_API_KEY:?Set WORKER_API_KEY}
+
 services:
   redis:
     image: redis:7-alpine
@@ -25,25 +29,32 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       MODE: compose
+      APP_ENV: ${APP_ENV:-production}
+      WORKER_API_KEY: ${WORKER_API_KEY:?Set WORKER_API_KEY}
+      OPERATOR_API_KEY: ${OPERATOR_API_KEY:?Set OPERATOR_API_KEY}
+      PIPELINE_TOKEN: ${PIPELINE_TOKEN:-}
+      ENABLE_CHAOS: ${ENABLE_CHAOS:-0}
+      MAX_PERSON_COUNT: ${MAX_PERSON_COUNT:-10000}
+      MAX_FRAME_BYTES: ${MAX_FRAME_BYTES:-524288}
       PUBLIC_URL: ${PUBLIC_URL:-}
     depends_on: [redis]
 
   worker-gate:
     <<: *worker
     hostname: worker-gate
-    environment: { ZONE: gate, API_URL: "http://api:8080", VIDEO: /app/videos/gate.mp4, SIM_AUTOSURGE: "150" }
+    environment: { <<: *worker-env, ZONE: gate, POD_NAME: worker-gate, VIDEO: /app/videos/gate.mp4, SIM_AUTOSURGE: "150" }
 
   worker-stage:
     <<: *worker
     hostname: worker-stage
-    environment: { ZONE: stage, API_URL: "http://api:8080", VIDEO: /app/videos/stage.mp4 }
+    environment: { <<: *worker-env, ZONE: stage, POD_NAME: worker-stage, VIDEO: /app/videos/stage.mp4 }
 
   worker-food:
     <<: *worker
     hostname: worker-food
-    environment: { ZONE: food, API_URL: "http://api:8080", VIDEO: /app/videos/food.mp4 }
+    environment: { <<: *worker-env, ZONE: food, POD_NAME: worker-food, VIDEO: /app/videos/food.mp4 }
 
   worker-exit:
     <<: *worker
     hostname: worker-exit
-    environment: { ZONE: exit, API_URL: "http://api:8080", VIDEO: /app/videos/exit.mp4 }
+    environment: { <<: *worker-env, ZONE: exit, POD_NAME: worker-exit, VIDEO: /app/videos/exit.mp4 }

@@ -63,4 +63,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Rolling update with automatic rollback
+        env:
+          PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
         run: python scripts/cs.py deploy --version "${{ inputs.version || github.sha }}" --run-id "gh-${{ github.run_number }}" --tests-passed ${{ inputs.broken && '--broken' || '' }} ${{ github.event_name == 'push' && '--build' || '' }}

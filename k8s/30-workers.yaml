@@ -35,6 +35,8 @@ spec:
             - { name: BROKEN, value: "0" }
             - { name: SIM_AUTOSURGE, value: "150" }
             - { name: FPS, value: "2" }
+            - name: WORKER_API_KEY
+              valueFrom: { secretKeyRef: { name: api-auth, key: WORKER_API_KEY } }
             - name: POD_NAME
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
           readinessProbe:      # ready = processed a frame in the last 5 s
@@ -86,6 +88,8 @@ spec:
             - { name: BROKEN, value: "0" }
             - { name: SIM_AUTOSURGE, value: "0" }
             - { name: FPS, value: "2" }
+            - name: WORKER_API_KEY
+              valueFrom: { secretKeyRef: { name: api-auth, key: WORKER_API_KEY } }
             - name: POD_NAME
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
           readinessProbe:      # ready = processed a frame in the last 5 s
@@ -137,6 +141,8 @@ spec:
             - { name: BROKEN, value: "0" }
             - { name: SIM_AUTOSURGE, value: "0" }
             - { name: FPS, value: "2" }
+            - name: WORKER_API_KEY
+              valueFrom: { secretKeyRef: { name: api-auth, key: WORKER_API_KEY } }
             - name: POD_NAME
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
           readinessProbe:      # ready = processed a frame in the last 5 s
@@ -188,6 +194,8 @@ spec:
             - { name: BROKEN, value: "0" }
             - { name: SIM_AUTOSURGE, value: "0" }
             - { name: FPS, value: "2" }
+            - name: WORKER_API_KEY
+              valueFrom: { secretKeyRef: { name: api-auth, key: WORKER_API_KEY } }
             - name: POD_NAME
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
           readinessProbe:      # ready = processed a frame in the last 5 s
