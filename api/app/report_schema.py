@@ -40,6 +40,11 @@ class Flow(BaseModel):
     speed: float = Field(0.0, ge=0, le=1414.214)
     angle: float = Field(0.0, ge=-180, le=180)
     moving: int = Field(0, ge=0, le=MAX_PERSON_COUNT)
+    state: str = Field("insufficient", pattern="^(one_way|multidirectional|counterflow|insufficient)$")
+    counterflow_confirmed: bool = False
+    forward_fraction: Fraction = 0.0
+    reverse_fraction: Fraction = 0.0
+    opposing_s: NonNegative = 0.0
 
 
 class Report(BaseModel):
@@ -47,6 +52,7 @@ class Report(BaseModel):
 
     zone: str = Field(min_length=1, max_length=63)
     count: int = Field(ge=0, le=MAX_PERSON_COUNT)
+    raw_detection_count: int | None = Field(None, ge=0, le=MAX_PERSON_COUNT)
     pod: str = Field(max_length=253, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9.-]*$")
     version: str = Field(max_length=128, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._+-]*$")
     sim: bool = False
