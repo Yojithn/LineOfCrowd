@@ -6,3 +6,5 @@ venv/
 *.log
 heartbeat.txt
 actions-runner/
+.env
+.env.*

@@ -11,13 +11,16 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import os
 import re
 import shutil
 import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -62,10 +65,13 @@ def stage(run_id: str, version: str, name: str, state: str, note: str = "", prev
                        "note": note, "previous": previous}).encode()
     req = urllib.request.Request(f"{API_URL}/api/pipeline", data=body, method="POST",
                                  headers={"Content-Type": "application/json"})
+    req.add_unredirected_header("X-Pipeline-Token", os.getenv("PIPELINE_TOKEN", ""))
     try:
         urllib.request.urlopen(req, timeout=3).read()
-    except Exception:
-        pass
+    except urllib.error.HTTPError as exc:
+        print(f"   [pipeline] API rejected the status update (HTTP {exc.code}).", flush=True)
+    except OSError as exc:
+        print(f"   [pipeline] Could not send the status update ({type(exc).__name__}).", flush=True)
     print(f"   [pipeline] {name}: {state} {note}".rstrip(), flush=True)
 
 
@@ -111,6 +117,10 @@ def cmd_doctor(_args) -> int:
 def cmd_up(args) -> int:
     if cmd_doctor(args) != 0:
         return 1
+    auth = {name: os.getenv(name, "") for name in ("WORKER_API_KEY", "OPERATOR_API_KEY", "PIPELINE_TOKEN")}
+    if not auth["WORKER_API_KEY"] or not auth["OPERATOR_API_KEY"]:
+        say("Set WORKER_API_KEY and OPERATOR_API_KEY before running up. See README.")
+        return 1
     clusters = subprocess.run(["kind", "get", "clusters"], capture_output=True, text=True).stdout.split()
     if CLUSTER in clusters:
         say("Cluster already exists, reusing it")
@@ -120,6 +130,20 @@ def cmd_up(args) -> int:
 
     say("Building images and loading them into the cluster (first time: a few minutes)")
     build_and_load("v1")
+
+    context = ["kubectl", "--context", f"kind-{CLUSTER}"]
+    run([*context, "apply", "-f", str(ROOT / "k8s" / "00-namespace.yaml")])
+    secret = {
+        "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+        "metadata": {"name": "api-auth", "namespace": NS},
+        "data": {name: base64.b64encode(value.encode()).decode() for name, value in auth.items()},
+    }
+    config = {
+        "apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "api-config", "namespace": NS},
+        "data": {"APP_ENV": os.getenv("APP_ENV", "production"), "ENABLE_CHAOS": os.getenv("ENABLE_CHAOS", "0")},
+    }
+    resources = json.dumps({"apiVersion": "v1", "kind": "List", "items": [secret, config]})
+    subprocess.run([*context, "apply", "--server-side", "-f", "-"], text=True, input=resources, check=True)
 
     say("Applying Kubernetes manifests")
     run(["kubectl", "--context", f"kind-{CLUSTER}", "apply", "-f", str(ROOT / "k8s")])
@@ -154,7 +178,8 @@ def cmd_deploy(args) -> int:
         try:
             build_and_load(version)
         except subprocess.CalledProcessError as exc:
-            stage(run_id, version, "build", "fail", str(exc), previous=previous)
+            stage(run_id, version, "build", "fail", f"Image build exited with code {exc.returncode}.",
+                  previous=previous)
             return 1
         stage(run_id, version, "build", "ok", previous=previous)
     else:

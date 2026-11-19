@@ -2,7 +2,7 @@
 // the open incident for this zone, and the actions an operator can take.
 import { store, thresholds } from "./store.js";
 import { api } from "./api.js";
-import { $, h, WORD, TREND, clock, clamp, duration, forecastEta, esc, shortPod, tween } from "./util.js";
+import { $, h, WORD, TREND, clock, clamp, duration, forecastEta, tween } from "./util.js";
 import { toast } from "./toast.js";
 import { flyToZone } from "./scene.js";
 
@@ -11,6 +11,9 @@ let openId = null;
 let series = [];          // [[t, density|null], ...] for the chart
 let returnFocus = null;
 let hoverX = null;
+let frameAt = 0;
+let frameId = null;
+const FRAME_STALE_MS = 4000;
 const el = {};
 
 export const drawerOpen = () => openId;
@@ -20,6 +23,9 @@ export function openDrawer(id) {
   if (!cfgZone) return;
   if (openId !== id) returnFocus = returnFocus || document.activeElement;
   openId = id;
+  frameAt = 0;
+  frameId = null;
+  series = [];
   store.set({ selected: id });
   build(cfgZone);
   box().classList.add("open");
@@ -41,9 +47,9 @@ export function closeDrawer() {
 }
 
 async function loadHistory(id) {
-  series = [];
   const r = await api.get("/api/history");
-  if (r.ok && openId === id) series = (r.data.zones[id] || []).map((p) => [p[0], p[1]]);
+  if (openId !== id) return;
+  if (r.ok) series = (r.data.zones[id] || []).map((p) => [p[0], p[1]]);
   drawChart();
 }
 
@@ -53,59 +59,117 @@ function build(zc) {
   el.st = h("div", { class: "st" });
   el.close = h("button", { class: "x", "aria-label": "Close zone details", html: "&#x2715;", onclick: closeDrawer });
   el.feed = h("img", { alt: `Live camera at ${zc.name}` });
+  el.feed.hidden = true;
+  el.feedState = h("div", { class: "feed-state", role: "status" }, "Waiting for camera frame");
+  el.feedType = h("span", { class: "feed-type" }, "Feed type pending");
+  el.feedHealth = h("span", { class: "feed-health" }, "Connecting");
+  el.pod = h("span", { class: "feed-pod" }, "Camera / pod pending");
   el.people = h("b", {}, "0");
   el.dens = h("b", {}, "0.0");
   el.load = h("b", {}, "0%");
-  el.cam = h("b", {}, "--");
-  el.camLabel = h("span", { class: "label" }, "Detection time");
   el.svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   el.read = h("div", { class: "read" });
   el.rose = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   el.rose.setAttribute("viewBox", "0 0 150 150");
   el.move = h("p");
+  el.flow = h("p");
   el.fc = h("p");
   el.ver = h("p");
   el.inc = h("div");
+  el.actionStatus = h("p", { class: "action-status", role: "status", "aria-live": "polite" });
   el.surge = h("button", { class: "btn", onclick: () => surge(zc) }, "Run surge drill");
-  el.crash = h("button", { class: "btn danger", onclick: () => crash(zc) }, "Crash this camera");
+  el.crash = h("button", { class: "btn danger", onclick: () => { el.confirm.hidden = false; el.confirm.querySelector("button").focus(); } }, "Crash this camera");
+  el.confirm = h("div", { class: "crash-confirm", hidden: true },
+    h("p", {}, `Restart the ${zc.name} camera? The feed will briefly go offline.`),
+    h("button", { class: "btn danger", onclick: () => { el.confirm.hidden = true; crash(zc); } }, "Confirm camera crash"),
+    h("button", { class: "btn", onclick: () => { el.confirm.hidden = true; el.crash.focus(); } }, "Cancel"));
   const chart = h("div", { class: "chart" }, el.svg, el.read);
   chart.addEventListener("pointermove", (e) => { const r = el.svg.getBoundingClientRect(); hoverX = (e.clientX - r.left) / r.width; drawChart(); });
   chart.addEventListener("pointerleave", () => { hoverX = null; drawChart(); });
 
   d.append(
-    h("header", {}, h("div", {}, el.st, h("h2", {}, zc.name)), el.close),
+    h("header", {}, h("div", {}, h("span", { class: "eyebrow" }, "Zone inspection"), h("h2", {}, zc.name), el.st), el.close),
     h("div", { class: "body" },
-      h("div", { class: "feed" }, el.feed),
-      h("div", { class: "stats" },
-        h("div", {}, el.people, h("span", { class: "label" }, "People in view")),
-        h("div", {}, el.dens, h("span", { class: "label" }, "Per m²")),
-        h("div", {}, el.load, h("span", { class: "label" }, "Of crush level")),
-        h("div", {}, el.cam, el.camLabel)),
-      h("div", {}, h("span", { class: "label" }, "Last 15 minutes. Hover to read a moment."), chart),
-      h("div", { class: "duo" }, h("div", { class: "compass" }, el.rose), h("div", {}, el.move, el.fc, el.ver)),
+      h("section", { class: "overview", "aria-label": "Zone overview" },
+        h("div", { class: "stats" },
+          h("div", {}, el.people, h("span", { class: "label" }, "People in view")),
+          h("div", { class: "density-stat" }, el.dens, h("span", { class: "label" }, "People / m²")),
+          h("div", {}, el.load, h("span", { class: "label" }, "Of crush-risk threshold")))),
+      h("section", { class: "inspect-section", "aria-label": "Camera feed" },
+        h("div", { class: "section-head" }, h("h3", {}, "Camera feed"), el.feedHealth),
+        h("div", { class: "feed" }, el.feed, el.feedState, el.feedType), el.pod, el.ver),
+      h("section", { class: "inspect-section", "aria-label": "Density history" },
+        h("div", { class: "section-head" }, h("h3", {}, "Density history"), h("span", { class: "label" }, "Last 15 minutes · observed")),
+        chart, h("div", { class: "chart-axis" }, h("span", {}, "15 min ago"), h("span", {}, "Density · people / m²"), h("span", {}, "Now"))),
+      h("section", { class: "inspect-section", "aria-label": "Movement analysis" },
+        h("h3", {}, "Movement analysis"), h("div", { class: "duo" }, h("div", { class: "compass" }, el.rose), h("div", {}, el.move, el.flow))),
+      h("section", { class: "inspect-section forecast", "aria-label": "Forecast and status" },
+        h("h3", {}, "Forecast and status"), el.fc),
       el.inc,
-      h("div", { class: "actions" }, el.surge, el.crash,
-        h("button", { class: "btn", onclick: () => flyToZone(zc.id) }, "Show on map"))));
+      h("section", { class: "inspect-section operations", "aria-label": "Operational controls" },
+        h("h3", {}, "Operational controls"),
+        h("div", { class: "actions" }, h("button", { class: "btn go", onclick: () => flyToZone(zc.id) }, "Show on map"), el.surge, el.crash),
+        el.confirm, el.actionStatus)));
+
 }
 
 async function surge(zc) {
+  if (el.surge.disabled) return;
+  const button = el.surge;
+  const status = el.actionStatus;
+  button.disabled = true;
+  button.textContent = "Starting drill…";
+  status.textContent = "Starting surge drill…";
   const r = await api.post(`/api/chaos/surge/${zc.id}`);
+  button.disabled = false;
+  button.textContent = "Run surge drill";
+  status.textContent = r.ok ? "Surge drill started." : `Drill failed: ${r.message}`;
   toast(r.ok ? `Surge drill started at ${zc.name}` : r.message, !r.ok);
 }
 
 async function crash(zc) {
-  el.crash.disabled = true;
+  if (el.crash.disabled) return;
+  const button = el.crash;
+  const status = el.actionStatus;
+  button.disabled = true;
+  button.textContent = "Crashing camera…";
+  status.textContent = "Sending camera crash request…";
   const r = await api.post(`/api/chaos/kill/${zc.id}?by=dashboard`);
+  status.textContent = r.ok ? "Camera crash requested. Waiting for recovery." : `Camera crash failed: ${r.message}`;
   toast(r.ok ? `Crashed the ${zc.name} camera. Watch it come back.` : r.message, !r.ok);
-  setTimeout(() => { if (el.crash) el.crash.disabled = false; }, 4000);
+  setTimeout(() => { button.disabled = false; button.textContent = "Crash this camera"; }, r.ok ? 4000 : 0);
 }
 
 async function act(inc, action, label) {
+  const buttons = [...el.inc.querySelectorAll("button")];
+  if (buttons.some((b) => b.disabled)) return;
+  buttons.forEach((b) => { b.disabled = true; });
   const r = await api.post(`/api/incidents/${inc.id}/${action}`, { by: "control room" });
+  if (!r.ok) buttons.forEach((b) => { b.disabled = false; });
   toast(r.ok ? `${inc.id}: ${label}` : r.message, !r.ok);
 }
 
-document.addEventListener("frame", (e) => { if (e.detail.id === openId && el.feed) el.feed.src = e.detail.url; });
+document.addEventListener("frame", (e) => {
+  if (e.detail.id !== openId || !el.feed) return;
+  frameAt = e.detail.at || Date.now();
+  frameId = e.detail.id;
+  el.feed.src = e.detail.url;
+  updateFeed(store.get());
+});
+
+function updateFeed(s) {
+  if (!openId || !el.feed) return;
+  const z = s.live?.zones.find((q) => q.id === openId);
+  const offline = z?.offline || s.conn === "lost";
+  const fresh = !offline && frameId === openId && Date.now() - frameAt < FRAME_STALE_MS;
+  el.feed.hidden = !fresh;
+  el.feedState.hidden = fresh;
+  el.feedState.textContent = z?.offline ? "Camera offline · waiting for recovery"
+    : s.conn === "lost" ? "Live stream disconnected"
+    : frameAt ? "Camera frame stale · waiting for a new frame" : "Waiting for camera frame";
+  el.feedHealth.textContent = z?.offline ? "Offline" : s.conn === "lost" ? "Disconnected" : fresh ? "Receiving frames" : "No recent frame";
+}
+setInterval(() => updateFeed(store.get()), 1000);
 
 function direction(deg) {
   const a = ((deg % 360) + 360) % 360;
@@ -143,8 +207,10 @@ function drawRose(z) {
   el.rose.innerHTML = s;
   if (z.offline) el.move.innerHTML = "<b>Camera restarting.</b> Movement will show again in a few seconds.";
   else if (!f.moving || f.moving < 4) el.move.innerHTML = "<b>Mostly standing still.</b> Too few people are moving to read a direction.";
-  else if (hot) el.move.innerHTML = `<b>Turbulent.</b> Groups are pushing in opposite directions, an early warning sign in a packed crowd.`;
-  else el.move.innerHTML = `<b>Orderly.</b> ${f.moving} people moving, mostly ${direction(f.angle)}.`;
+  else el.move.innerHTML = `<b>${f.moving} people moving.</b> Predominantly ${direction(f.angle)}.`;
+  el.flow.textContent = z.offline ? "Flow unavailable while camera is offline."
+    : f.moving >= 4 ? hot ? "Low directional agreement; movement is varied." : "Movement is mostly aligned."
+    : "Insufficient movement to assess flow.";
 }
 
 function drawChart() {
@@ -171,6 +237,8 @@ function drawChart() {
     <text x="${W - 4}" y="${(Y(t.critical) - 4).toFixed(1)}" fill="#ff8d85" font-size="10" text-anchor="end">crush risk ${t.critical}</text>
     <text x="${W - 4}" y="${(Y(t.warning) - 4).toFixed(1)}" fill="#ffb066" font-size="10" text-anchor="end">crowded ${t.warning}</text>
     <line x1="0" x2="${W}" y1="${H - pad}" y2="${H - pad}" stroke="#563628"/>
+    <text x="4" y="11" fill="#bba48c" font-size="10">${max.toFixed(1)} /m²</text>
+    <text x="4" y="${H - 7}" fill="#bba48c" font-size="10">0</text>
     <path d="${path}" fill="none" stroke="#f3eadb" stroke-width="2" stroke-linejoin="round"/>`;
   el.read.style.display = "none";
   if (hoverX != null && vals.length) {
@@ -192,29 +260,30 @@ function render(s) {
   if (!openId || !s.live) return;
   const z = s.live.zones.find((q) => q.id === openId);
   if (!z) return;
-  const st = z.offline ? "offline" : z.status;
+  const st = z.offline || s.conn === "lost" ? "offline" : z.status;
   box().dataset.s = st;
-  el.st.textContent = WORD[st];
-  if (z.offline) { el.people.textContent = "--"; el.people._v = undefined; } else tween(el.people, z.count, 0);
-  tween(el.dens, z.offline ? 0 : z.density, 1);
-  el.load.textContent = `${z.load_pct}%`;
-  if (z.sim) { el.cam.textContent = "Simulated"; el.camLabel.textContent = "Camera feed"; }
-  else { el.cam.textContent = `${Math.round(z.infer_ms)} ms`; el.camLabel.textContent = "Detection time"; }
+  el.st.textContent = s.conn === "lost" ? "Stream disconnected" : WORD[st];
+  if (st === "offline") { el.people.textContent = "--"; el.people._v = undefined; el.dens.textContent = "--"; el.dens._v = undefined; el.load.textContent = "--"; }
+  else { tween(el.people, z.count, 0); tween(el.dens, z.density, 1); el.load.textContent = `${z.load_pct}%`; }
+  el.feedType.textContent = z.sim ? "SIMULATED FEED" : "REAL FEED";
+  el.pod.textContent = `Camera / pod: ${z.pod || "Unavailable"}`;
+  el.ver.textContent = z.version ? `Camera software ${z.version} · detection ${Math.round(z.infer_ms)} ms` : "";
+  updateFeed(s);
   const last = series[series.length - 1];
-  if (!last || s.live.now - last[0] >= 2) series.push([s.live.now, z.offline ? null : z.density]);
+  if (s.conn === "live" && (!last || s.live.now - last[0] >= 2)) series.push([s.live.now, z.offline ? null : z.density]);
+  series = series.filter((p) => p[0] >= s.live.now - 15 * 60);
   drawChart();
   drawRose(z);
   const f = z.forecast || {};
   const eta = forecastEta(z);
-  el.fc.textContent = z.offline ? "" : s.conn === "lost" ? "Forecast unavailable while the stream is disconnected."
+  el.fc.textContent = z.offline ? "Forecast unavailable while the camera is offline." : s.conn === "lost" ? "Forecast unavailable while the stream is disconnected."
     : z.status === "critical" ? "Observed crush risk."
-    : eta != null ? `Forecast: crush risk in about ${duration(Math.ceil(eta))} if the trend holds.`
-    : `${TREND[f.trend] || "Trend unavailable"}. No current crush-risk forecast.`;
-  el.ver.innerHTML = z.version ? `Camera software <b>${esc(z.version)}</b> on pod <b>${esc(shortPod(z.pod))}</b>` : "";
+    : eta != null ? `Predicted ${TREND[f.trend]?.toLowerCase() || "trend"}: crush-risk threshold in about ${duration(Math.ceil(eta))} if the trend holds.`
+    : `Predicted trend: ${TREND[f.trend]?.toLowerCase() || "unavailable"}. No valid threshold arrival estimate.`;
   el.surge.hidden = !z.sim;
 
   const inc = (s.live.incidents || []).find((i) => i.zone === openId && i.state !== "resolved");
-  if (!inc) { el.inc.innerHTML = ""; return; }
+  if (!inc) { el.inc.innerHTML = ""; delete el.inc.dataset.key; return; }
   const key = `${inc.id}:${inc.state}:${inc.timeline.length}`;
   if (el.inc.dataset.key === key) return;
   el.inc.dataset.key = key;

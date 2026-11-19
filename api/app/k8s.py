@@ -8,6 +8,7 @@ from typing import Optional
 _client = None
 _namespace = os.getenv("NAMESPACE", "crowdsentinel")
 _cache: dict = {"ts": 0.0, "pods": []}
+_timeout = (2, 2)
 
 
 def in_cluster() -> bool:
@@ -18,8 +19,9 @@ def _api():
     global _client
     if _client is None:
         from kubernetes import client, config  # imported lazily so local mode needs nothing
-        config.load_incluster_config()
-        _client = client.CoreV1Api()
+        configuration = client.Configuration(retries=0)
+        config.load_incluster_config(client_configuration=configuration)
+        _client = client.CoreV1Api(client.ApiClient(configuration))
     return _client
 
 
@@ -47,7 +49,8 @@ def list_pods(max_age_s: float = 1.0) -> list[dict]:
     if now - _cache["ts"] < max_age_s:
         return _cache["pods"]
     pods = []
-    resp = _api().list_namespaced_pod(_namespace, label_selector="app.kubernetes.io/part-of=crowdsentinel")
+    resp = _api().list_namespaced_pod(_namespace, label_selector="app.kubernetes.io/part-of=crowdsentinel",
+                                     _request_timeout=_timeout)
     for p in resp.items:
         labels = p.metadata.labels or {}
         env_version = None
@@ -72,14 +75,15 @@ def list_pods(max_age_s: float = 1.0) -> list[dict]:
 
 def delete_worker_pod(zone: str) -> Optional[str]:
     """Delete the running camera pod for a zone, instantly. Returns the pod name."""
-    resp = _api().list_namespaced_pod(_namespace, label_selector=f"role=worker,zone={zone}")
+    resp = _api().list_namespaced_pod(_namespace, label_selector=f"role=worker,zone={zone}",
+                                     _request_timeout=_timeout)
     live = [p for p in resp.items if p.metadata.deletion_timestamp is None]
     if not live:
         return None
     # Prefer the pod that is actually serving (ready) so the effect is visible.
     live.sort(key=lambda p: _pod_state(p) != "ready")
     target = live[0].metadata.name
-    _api().delete_namespaced_pod(target, _namespace, grace_period_seconds=0)
+    _api().delete_namespaced_pod(target, _namespace, grace_period_seconds=0, _request_timeout=_timeout)
     _cache["ts"] = 0.0
     return target
 
@@ -87,11 +91,12 @@ def delete_worker_pod(zone: str) -> Optional[str]:
 def delete_pod(name: str) -> str:
     """Delete one pod chosen in the cluster inspector. Only camera and API pods are allowed:
     Redis has a single copy, so deleting it would wipe the live state."""
-    pod = _api().read_namespaced_pod(name, _namespace)
+    pod = _api().read_namespaced_pod(name, _namespace, _request_timeout=_timeout)
     labels = pod.metadata.labels or {}
     role = labels.get("role")
     if labels.get("app.kubernetes.io/part-of") != "crowdsentinel" or role not in ("worker", "api"):
         raise PermissionError("Only camera and API pods can be deleted from the dashboard.")
-    _api().delete_namespaced_pod(name, _namespace, grace_period_seconds=0 if role == "worker" else 2)
+    _api().delete_namespaced_pod(name, _namespace, grace_period_seconds=0 if role == "worker" else 2,
+                                _request_timeout=_timeout)
     _cache["ts"] = 0.0
     return role

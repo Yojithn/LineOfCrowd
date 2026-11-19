@@ -6,23 +6,30 @@ history, streams live state to the control room, and serves the dashboard.
 from __future__ import annotations
 
 import asyncio
-import base64
 import io
 import json
 import os
 import socket
 import threading
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal, Optional
 
-from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
+from pydantic_core import PydanticCustomError
+from redis.backoff import NoBackoff
+from redis.retry import Retry
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import core, k8s
+from . import core, k8s, security
+from .observability import ApiErrors, http_error, invalid_request, log, service_error
+from .report_schema import CameraReportRoute, Report
 
 BASE = Path(__file__).resolve().parent
 STATIC = BASE.parent / "static"
@@ -35,7 +42,6 @@ SERIES_LEN = int(15 * 60 / SERIES_STEP_S)   # 15 minutes of replay
 
 APP_VERSION = os.getenv("APP_VERSION", "v1")
 POD_NAME = os.getenv("POD_NAME", socket.gethostname())
-PIPELINE_TOKEN = os.getenv("PIPELINE_TOKEN", "")
 PUBLIC_URL = os.getenv("PUBLIC_URL", "").rstrip("/")
 MODE = os.getenv("MODE") or ("k8s" if k8s.in_cluster() else ("compose" if os.getenv("REDIS_URL") else "local"))
 PLATFORM = {"k8s": "Kubernetes", "compose": "Docker"}.get(MODE, "the operator")
@@ -45,13 +51,32 @@ def _redis():
     url = os.getenv("REDIS_URL")
     if url:
         import redis
-        return redis.Redis.from_url(url, socket_timeout=2, socket_connect_timeout=2)
+        return redis.Redis.from_url(url, socket_timeout=2, socket_connect_timeout=2,
+                                    retry=Retry(NoBackoff(), 0))
     import fakeredis  # local mode: an in-process Redis, no server needed
     return fakeredis.FakeRedis()
 
 
 R = _redis()
-app = FastAPI(title="CrowdSentinel", version=APP_VERSION)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    security.check_configuration()
+    stopped = threading.Event()
+    watcher = threading.Thread(target=_watch, args=(stopped,), name="camera-watcher", daemon=True)
+    watcher.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        await run_in_threadpool(watcher.join, 3)
+
+
+app = FastAPI(title="CrowdSentinel", version=APP_VERSION, lifespan=lifespan)
+app.add_middleware(ApiErrors)
+app.add_exception_handler(RequestValidationError, invalid_request)
+app.add_exception_handler(StarletteHTTPException, http_error)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
@@ -76,17 +101,21 @@ def thresholds() -> core.Thresholds:
 # ---------- helpers ----------
 
 def add_event(kind: str, text: str, zone: Optional[str] = None) -> None:
-    ev = {"ts": time.time(), "kind": kind, "text": text, "zone": zone}
     pipe = R.pipeline()
+    _queue_event(pipe, kind, text, zone)
+    pipe.execute()
+
+
+def _queue_event(pipe, kind: str, text: str, zone: Optional[str] = None) -> None:
+    ev = {"ts": time.time(), "kind": kind, "text": text, "zone": zone}
     pipe.lpush("events", json.dumps(ev))
     pipe.ltrim("events", 0, 199)
-    pipe.execute()
 
 
 def _zone_or_404(zone: str) -> dict:
     z = ZONES.get(zone)
     if not z:
-        raise HTTPException(404, f"Unknown zone '{zone}'. Known zones: {', '.join(ZONES)}")
+        raise HTTPException(404, f"Unknown zone. Known zones: {', '.join(ZONES)}")
     return z
 
 
@@ -140,18 +169,16 @@ def _pods() -> list[dict]:
     if MODE == "k8s":
         try:
             return k8s.list_pods()
-        except Exception as exc:  # keep the dashboard alive even if RBAC is wrong
-            return [{"name": f"k8s error: {exc.__class__.__name__}", "role": "other", "state": "crashing"}]
+        except Exception as exc:
+            service_error(exc, "pod_inventory_failure")
+            return [{"name": "Pod inventory unavailable", "role": "other", "state": "crashing"}]
     pods = []
     for key in R.scan_iter("hb:*"):
         raw = R.get(key)
         if raw:
             pods.append(json.loads(raw))
-    try:
-        R.ping()
-        pods.append({"name": "redis", "role": "redis", "zone": None, "state": "ready"})
-    except Exception:
-        pods.append({"name": "redis", "role": "redis", "zone": None, "state": "crashing"})
+    R.ping()
+    pods.append({"name": "redis", "role": "redis", "zone": None, "state": "ready"})
     pods.sort(key=lambda p: (p["role"], p.get("zone") or "", p["name"]))
     return pods
 
@@ -209,59 +236,53 @@ def _track_peak(z: dict, d: float, count: int) -> None:
 
 # ---------- background watcher: offline cameras and replay gaps ----------
 
-def _watch() -> None:
-    while True:
+def _watch_once() -> None:
+    now = time.time()
+    R.set(f"hb:{POD_NAME}", json.dumps({"name": POD_NAME, "role": "api", "zone": None,
+                                       "state": "ready", "version": APP_VERSION}), ex=6)
+    for z in CONFIG["zones"]:
+        zone = z["id"]
+        raw = R.get(f"zone:{zone}")
+        if raw is None:
+            continue
         try:
-            now = time.time()
-            R.set(f"hb:{POD_NAME}", json.dumps({"name": POD_NAME, "role": "api", "zone": None,
-                                                "state": "ready", "version": APP_VERSION}), ex=6)
-            for z in CONFIG["zones"]:
-                raw = R.get(f"zone:{z['id']}")
-                if raw is None:
-                    continue
-                rec = json.loads(raw)
-                online = "1" if now - rec["ts"] <= OFFLINE_AFTER else "0"
-                if online == "0":
-                    _append_series(z["id"], now, None, 0, "offline")
-                prev = R.getset(f"online:{z['id']}", online)  # atomic, so 2 API pods never double-log
-                prev = prev.decode() if prev else None
-                if prev == "1" and online == "0":
-                    R.set(f"offline_since:{z['id']}", now)
-                    add_event("offline", f"{z['name']} camera stopped reporting. {PLATFORM} is restarting it.", z["id"])
-                elif prev == "0" and online == "1":
-                    since = R.get(f"offline_since:{z['id']}")
-                    took = f" after {now - float(since):.1f} s" if since else ""
-                    add_event("online", f"{z['name']} camera is back{took} on pod {rec.get('pod', '?')}.", z["id"])
-        except Exception:
-            pass
-        time.sleep(1)
+            rec = json.loads(raw)
+            online = "1" if now - rec["ts"] <= OFFLINE_AFTER else "0"
+        except (KeyError, TypeError, ValueError) as exc:
+            service_error(exc, "watcher_invalid_state", zone=zone)
+            continue
+        if online == "0":
+            _append_series(zone, now, None, 0, "offline")
+        prev = R.set(f"online:{zone}", online, get=True)
+        if prev == b"1" and online == "0":
+            log("warning", "camera_offline", zone=zone)
+            R.set(f"offline_since:{zone}", now)
+            add_event("offline", f"{z['name']} camera stopped reporting. {PLATFORM} is restarting it.", zone)
+        elif prev == b"0" and online == "1":
+            log("info", "camera_online", zone=zone)
+            since = R.get(f"offline_since:{zone}")
+            took = f" after {now - float(since):.1f} s" if since else ""
+            add_event("online", f"{z['name']} camera is back{took} on pod {rec.get('pod', '?')}.", zone)
 
 
-threading.Thread(target=_watch, daemon=True).start()
+def _watch(stopped: threading.Event) -> None:
+    last_failure = float("-inf")
+    while not stopped.is_set():
+        try:
+            _watch_once()
+        except Exception as exc:
+            now = time.monotonic()
+            if now - last_failure >= 30:
+                service_error(exc, "watcher_failure")
+                last_failure = now
+        else:
+            if last_failure != float("-inf"):
+                log("info", "watcher_recovered")
+                last_failure = float("-inf")
+        stopped.wait(1)
 
 
-# ---------- models ----------
-
-class Flow(BaseModel):
-    coherence: float = 1.0      # 1 = everyone moving the same way, 0 = chaotic
-    counterflow: float = 0.0    # 1 - coherence, only when enough people are moving
-    speed: float = 0.0          # average speed, frame widths per second
-    angle: float = 0.0          # average direction in degrees
-    moving: int = 0
-
-
-class Report(BaseModel):
-    zone: str
-    count: int = Field(ge=0)
-    pod: str = "unknown"
-    version: str = "v1"
-    sim: bool = False
-    fps: float = 0.0
-    infer_ms: float = 0.0
-    flow: Flow = Flow()
-    points: list[list[float]] = []   # [x, y, vx, vy] in 0..1 frame coordinates
-    frame: Optional[str] = None      # base64 JPEG
-
+# ---------- other request models ----------
 
 class PipelineUpdate(BaseModel):
     run: str
@@ -279,7 +300,7 @@ class Settings(BaseModel):
     @model_validator(mode="after")
     def ordered(self):
         if self.warning >= self.critical:
-            raise ValueError("The crowded level must be lower than the crush-risk level.")
+            raise PydanticCustomError("threshold_order", "The crowded level must be lower than the crush-risk level.")
         return self
 
 
@@ -306,11 +327,11 @@ def healthz():
 
 @app.get("/readyz")
 def readyz():
-    try:
-        R.ping()
-    except Exception as exc:
-        raise HTTPException(503, f"Redis is not reachable: {exc}")
+    R.ping()
     return {"ok": True}
+
+
+app.add_api_route("/api/operator", security.operator_sign_in, methods=["GET"])
 
 
 @app.get("/api/config")
@@ -330,9 +351,31 @@ def config(request: Request):
 
 # ---------- camera reports ----------
 
-@app.post("/api/report")
-def report(r: Report):
+def _validate_worker_identity(r: Report) -> None:
+    if MODE == "compose" and r.pod != f"worker-{r.zone}":
+        raise HTTPException(422, "Worker identity does not match the reported zone.")
+    if MODE == "k8s":
+        try:
+            pods = k8s.list_pods()
+        except Exception as exc:
+            log("error", "pod_inventory_failure", zone=r.zone, status=503, error_type=type(exc).__name__)
+            raise HTTPException(503, "Worker identity verification temporarily unavailable.") from None
+        if not any(p["name"] == r.pod and p["role"] == "worker" and p["zone"] == r.zone for p in pods):
+            raise HTTPException(422, "Worker identity does not match the reported zone.")
+
+
+camera_routes = APIRouter(route_class=CameraReportRoute)
+
+
+@camera_routes.post("/api/report")
+def report(r: Report, request: Request):
     z = _zone_or_404(r.zone)
+    request.state.zone = r.zone
+    _validate_worker_identity(r)
+    try:
+        jpeg = r.jpeg()
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
     t = thresholds()
     now = time.time()
     d = core.density(r.count, z["area_m2"])
@@ -340,25 +383,24 @@ def report(r: Report):
     rec = {
         "ts": now, "count": r.count, "density": d, "status": st, "pod": r.pod,
         "version": r.version, "sim": r.sim, "fps": r.fps, "infer_ms": r.infer_ms,
-        "flow": r.flow.model_dump(), "points": r.points[:150],
+        "flow": r.flow.model_dump(), "points": r.points,
     }
-    flags = R.mget(f"kill:{z['id']}", f"surge:{z['id']}")   # requests waiting for this camera
     pipe = R.pipeline()
+    pipe.set(f"status:{z['id']}", st, get=True)
     pipe.set(f"zone:{z['id']}", json.dumps(rec))
     pipe.lpush(f"hist:{z['id']}", f"{now:.2f}:{d}")
     pipe.ltrim(f"hist:{z['id']}", 0, 179)
-    pipe.set(f"hb:{r.pod}", json.dumps({"name": r.pod, "role": "worker", "zone": z["id"],
-                                         "state": "ready", "version": r.version}), ex=6)
-    if r.frame:
-        try:
-            pipe.set(f"frame:{z['id']}", base64.b64decode(r.frame), ex=10)
-        except Exception:
-            pass
-    pipe.getset(f"status:{z['id']}", st)
-    pipe.delete(f"kill:{z['id']}")
-    pipe.delete(f"surge:{z['id']}")
+    pipe.set(f"hb:worker:{r.pod}", json.dumps({"name": r.pod, "role": "worker", "zone": z["id"],
+                                              "state": "ready", "version": r.version}), ex=6)
+    if jpeg is not None:
+        pipe.set(f"frame:{z['id']}", jpeg, ex=10)
+    chaos_enabled = security.chaos_enabled()
+    if chaos_enabled:
+        pipe.getdel(f"kill:{z['id']}")
+        pipe.getdel(f"surge:{z['id']}")
     results = pipe.execute()
-    prev = results[-3].decode() if results[-3] else None
+    prev = results[0].decode() if results[0] else None
+    kill, surge = map(bool, results[-2:]) if chaos_enabled else (False, False)
     _append_series(z["id"], now, d, r.count, st)
 
     if prev and prev != st:
@@ -375,7 +417,10 @@ def report(r: Report):
         if R.set(f"cf:{z['id']}", 1, nx=True, ex=30):
             add_event("warning", f"Counter-flow at {z['name']}: groups are pushing in opposite directions.", z["id"])
 
-    return {"ok": True, "density": d, "status": st, "kill": bool(flags[0]), "surge": bool(flags[1])}
+    return {"ok": True, "density": d, "status": st, "kill": kill, "surge": surge}
+
+
+app.include_router(camera_routes)
 
 
 # ---------- live state ----------
@@ -416,14 +461,20 @@ async def stream(request: Request):
     If this API pod dies, the browser reconnects to the other one automatically."""
     async def gen():
         yield "retry: 1000\n\n"
+        last_failure = float("-inf")
         while True:
             if await request.is_disconnected():
                 break
             try:
                 payload = await run_in_threadpool(build_state)
                 yield f"event: state\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
+                last_failure = float("-inf")
             except Exception as exc:
-                yield f"event: problem\ndata: {json.dumps({'message': str(exc)})}\n\n"
+                now = time.monotonic()
+                if now - last_failure >= 30:
+                    service_error(exc, "stream_failure")
+                    last_failure = now
+                yield 'event: problem\ndata: {"message":"Live state temporarily unavailable."}\n\n'
             await asyncio.sleep(0.7)
 
     return StreamingResponse(gen(), media_type="text/event-stream",
@@ -459,19 +510,23 @@ def get_settings():
     return {"warning": t.warning, "critical": t.critical}
 
 
-@app.put("/api/settings")
+@app.put("/api/settings", dependencies=[Depends(security.require_operator)])
 def put_settings(s: Settings):
-    R.set("settings", json.dumps(s.model_dump()))
+    pipe = R.pipeline()
+    pipe.set("settings", json.dumps(s.model_dump()))
+    _queue_event(pipe, "info", f"Danger levels changed: crowded from {s.warning}, crush risk from {s.critical} per m².")
+    pipe.execute()
     _t_cache["ts"] = 0
-    add_event("info", f"Danger levels changed: crowded from {s.warning}, crush risk from {s.critical} per m².")
     return s.model_dump()
 
 
-@app.delete("/api/settings")
+@app.delete("/api/settings", dependencies=[Depends(security.require_operator)])
 def reset_settings():
-    R.delete("settings")
+    pipe = R.pipeline()
+    pipe.delete("settings")
+    _queue_event(pipe, "info", "Danger levels reset to the defaults.")
+    pipe.execute()
     _t_cache["ts"] = 0
-    add_event("info", "Danger levels reset to the defaults.")
     return CONFIG["thresholds"]
 
 
@@ -482,14 +537,15 @@ def incidents():
     return _incidents(50)
 
 
-@app.post("/api/incidents/{iid}/{action}")
+@app.post("/api/incidents/{iid}/{action}", dependencies=[Depends(security.require_operator)])
 def incident_action(iid: str, action: Literal["ack", "respond", "resolve"], body: IncidentAction = IncidentAction()):
     inc = _incident(iid)
     if not inc:
-        raise HTTPException(404, f"No incident called {iid}.")
+        raise HTTPException(404, "Incident not found.")
     if inc["state"] == "resolved":
         raise HTTPException(409, f"{iid} is already resolved.")
     now = time.time()
+    pipe = R.pipeline()
     if action == "ack":
         inc["state"] = "acknowledged"
         text = f"Acknowledged by {body.by}"
@@ -499,11 +555,12 @@ def incident_action(iid: str, action: Literal["ack", "respond", "resolve"], body
     else:
         inc["state"] = "resolved"
         inc["resolved_at"] = now
-        R.delete(f"incident_open:{inc['zone']}")
+        pipe.delete(f"incident_open:{inc['zone']}")
         text = f"Resolved by {body.by}"
     inc["timeline"].append({"t": now, "text": text, "by": body.by})
-    _save_incident(inc)
-    add_event("incident", f"{iid}: {text[:1].lower() + text[1:]}.", inc["zone"])
+    pipe.hset("incidents", iid, json.dumps(inc))
+    _queue_event(pipe, "incident", f"{iid}: {text[:1].lower() + text[1:]}.", inc["zone"])
+    pipe.execute()
     return inc
 
 
@@ -517,7 +574,7 @@ def _cooldown(key: str, seconds: int = 8) -> Optional[JSONResponse]:
                         status_code=429)
 
 
-@app.post("/api/chaos/kill/{zone}")
+@app.post("/api/chaos/kill/{zone}", dependencies=[Depends(security.require_chaos)])
 def chaos_kill(zone: str, by: str = Query("dashboard", max_length=20)):
     z = _zone_or_404(zone)
     if busy := _cooldown(zone):
@@ -526,8 +583,8 @@ def chaos_kill(zone: str, by: str = Query("dashboard", max_length=20)):
         try:
             pod = k8s.delete_worker_pod(zone)
         except Exception as exc:
-            R.delete(f"chaos_cooldown:{zone}")
-            raise HTTPException(500, f"Kubernetes refused to delete the pod: {exc}")
+            log("error", "pod_delete_failure", zone=zone, status=503, error_type=type(exc).__name__)
+            raise HTTPException(503, "Camera restart could not be confirmed.") from None
         if not pod:
             R.delete(f"chaos_cooldown:{zone}")
             raise HTTPException(409, "No running camera pod for this zone right now.")
@@ -541,7 +598,7 @@ def chaos_kill(zone: str, by: str = Query("dashboard", max_length=20)):
     return {"ok": True, "zone": zone, "pod": pod, "message": f"Crashed the {z['name']} camera."}
 
 
-@app.post("/api/chaos/pod/{name}")
+@app.post("/api/chaos/pod/{name}", dependencies=[Depends(security.require_chaos)])
 def chaos_pod(name: str):
     """Delete one specific pod, chosen in the cluster inspector."""
     if busy := _cooldown(name, 6):
@@ -549,16 +606,16 @@ def chaos_pod(name: str):
     if MODE == "k8s":
         try:
             role = k8s.delete_pod(name)
-        except PermissionError as exc:
+        except PermissionError:
             R.delete(f"chaos_cooldown:{name}")
-            raise HTTPException(403, str(exc))
+            raise HTTPException(403, "Only camera and API pods can be deleted from the dashboard.") from None
         except Exception as exc:
-            R.delete(f"chaos_cooldown:{name}")
-            raise HTTPException(500, f"Kubernetes refused to delete the pod: {exc}")
+            log("error", "pod_delete_failure", status=503, error_type=type(exc).__name__)
+            raise HTTPException(503, "Pod restart could not be confirmed.") from None
         what = "an API pod (the other one keeps serving)" if role == "api" else f"camera pod {name}"
         add_event("chaos", f"Chaos test from the control room: deleted {what}.")
         return {"ok": True, "pod": name, "role": role}
-    raw = R.get(f"hb:{name}")
+    raw = R.get(f"hb:worker:{name}") or R.get(f"hb:{name}")
     info = json.loads(raw) if raw else None
     if not info or info.get("role") != "worker":
         R.delete(f"chaos_cooldown:{name}")
@@ -568,7 +625,7 @@ def chaos_pod(name: str):
     return {"ok": True, "pod": name, "role": "worker"}
 
 
-@app.post("/api/chaos/surge/{zone}")
+@app.post("/api/chaos/surge/{zone}", dependencies=[Depends(security.require_chaos)])
 def chaos_surge(zone: str):
     z = _zone_or_404(zone)
     R.set(f"surge:{zone}", 1, ex=10)
@@ -580,8 +637,8 @@ def chaos_surge(zone: str):
 
 @app.post("/api/pipeline")
 def pipeline(u: PipelineUpdate, x_pipeline_token: str = Header("")):
-    if PIPELINE_TOKEN and x_pipeline_token != PIPELINE_TOKEN:
-        raise HTTPException(401, "Wrong pipeline token.")
+    if not security.matches(x_pipeline_token, security.PIPELINE_TOKEN):
+        raise HTTPException(401, "Pipeline authentication required.")
     raw = R.get("pipeline")
     cur = json.loads(raw) if raw else None
     if not cur or cur.get("run") != u.run:
