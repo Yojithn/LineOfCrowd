@@ -8,7 +8,7 @@ let LNG0 = 0, LAT0 = 0, M_LNG = 1;
 const ll = (dx, dy, z = 0) => [LNG0 + dx / M_LNG, LAT0 + dy / M_LAT, z];
 const rect = (cx, cy, w, h) => [ll(cx - w / 2, cy - h / 2), ll(cx + w / 2, cy - h / 2), ll(cx + w / 2, cy + h / 2), ll(cx - w / 2, cy + h / 2)];
 
-const G = { grid: [], wall: [], walks: [], palace: [], towers: [], dome: [], bulbs: [], zones: [] };
+const G = { floor: [], grid: [], wall: [], walks: [], palace: [], towers: [], dome: [], bulbs: [], zones: [] };
 let deckgl = null;
 let overview = null;
 let bootAt = 0;
@@ -23,6 +23,7 @@ function buildGeometry(cfg) {
   [LNG0, LAT0] = v.center;
   M_LNG = M_LAT * Math.cos((LAT0 * Math.PI) / 180);
   const [x0, y0] = v.wall.min_m, [x1, y1] = v.wall.max_m;
+  G.floor = [{ polygon: [ll(x0, y0), ll(x1, y0), ll(x1, y1), ll(x0, y1)] }];
   for (let x = x0; x <= x1; x += 40) G.grid.push({ path: [ll(x, y0), ll(x, y1)] });
   for (let y = y0; y <= y1; y += 40) G.grid.push({ path: [ll(x0, y), ll(x1, y)] });
   G.wall = [{ path: [ll(x0, y0), ll(x1, y0), ll(x1, y1), ll(x0, y1), ll(x0, y0)] }];
@@ -57,6 +58,7 @@ function buildGeometry(cfg) {
 
   G.zones = cfg.zones.map((z) => ({
     id: z.id, name: z.name, cx: z.offset_m[0], cy: z.offset_m[1], w: z.size_m[0], h: z.size_m[1],
+    landmark: z.id === "gate" ? "ENTRANCE" : z.id === "exit" ? "EXIT" : "",
     polygon: rect(z.offset_m[0], z.offset_m[1], z.size_m[0], z.size_m[1]), center: ll(z.offset_m[0], z.offset_m[1]),
   }));
   const c = Object.fromEntries(G.zones.map((z) => [z.id, z]));
@@ -154,14 +156,15 @@ function layers(now) {
     .filter((p) => p.from && p.to);
 
   return [
-    new deck.PathLayer({ id: "grid", data: G.grid, getPath: (d) => d.path, getColor: [86, 54, 40, 140], widthUnits: "pixels", getWidth: 1 }),
+    new deck.PolygonLayer({ id: "venue-floor", data: G.floor, getPolygon: (d) => d.polygon, stroked: false, filled: true, getFillColor: [31, 18, 14, 255] }),
+    new deck.PathLayer({ id: "grid", data: G.grid, getPath: (d) => d.path, getColor: [105, 74, 54, 105], widthUnits: "pixels", getWidth: 1 }),
     new deck.PathLayer({ id: "walks", data: G.walks, getPath: (d) => d.path, getColor: [120, 84, 62, 120], widthUnits: "meters", getWidth: 7, capRounded: true }),
     new deck.PathLayer({ id: "wall", data: G.wall, getPath: (d) => d.path, getColor: [...ZARI, 110], widthUnits: "pixels", getWidth: 1.5 }),
     new deck.PolygonLayer({
       id: "zones", data: zd, getPolygon: (d) => d.polygon, stroked: true, filled: true, pickable: true, lineWidthUnits: "pixels",
-      getLineWidth: (d) => (d.id === s.selected ? 3.5 : d.id === hoverZone ? 2.5 : 1.5),
-      getFillColor: (d) => [...COL[statusOf(d)], statusOf(d) === "critical" ? 55 + 90 * pulse : d.id === hoverZone ? 70 : 40],
-      getLineColor: (d) => (d.id === s.selected ? [...JASMINE, 255] : [...COL[statusOf(d)], 220]),
+      getLineWidth: (d) => (d.id === s.selected ? 3.5 : d.id === hoverZone ? 2.5 : 1.7),
+      getFillColor: (d) => [...COL[statusOf(d)], statusOf(d) === "critical" ? 65 + 65 * pulse : d.id === s.selected ? 76 : d.id === hoverZone ? 68 : 48],
+      getLineColor: (d) => (d.id === s.selected ? [...JASMINE, 255] : d.landmark ? [...ZARI, 240] : [...ZARI, 190]),
       updateTriggers: { getFillColor: [tick, s.replayT, Math.round(pulse * 10), hoverZone], getLineColor: [tick, s.replayT, s.selected], getLineWidth: [s.selected, hoverZone] },
     }),
     new deck.PolygonLayer({
@@ -184,8 +187,9 @@ function layers(now) {
       colorRange: HEAT, aggregation: "SUM", updateTriggers: { getPosition: [tick, s.replayT] },
     }),
     L.people && new deck.ScatterplotLayer({
-      id: "people", data: people, getPosition: (d) => d.p, radiusUnits: "meters", getRadius: 1.7, radiusMinPixels: 1.4,
-      getFillColor: (d) => (d.s === "critical" ? [255, 198, 190, 240] : [243, 234, 219, 215]),
+      id: "people", data: people, getPosition: (d) => d.p, radiusUnits: "meters", getRadius: 2.1, radiusMinPixels: 2,
+      stroked: true, lineWidthUnits: "pixels", getLineWidth: 1, getLineColor: [36, 19, 15, 245],
+      getFillColor: (d) => (d.s === "critical" ? [255, 198, 190, 250] : [243, 234, 219, 245]),
     }),
     L.pressure && new deck.ColumnLayer({
       id: "pressure", data: zd, getPosition: (d) => d.center, diskResolution: 6, radius: 12, extruded: true, pickable: true,
@@ -208,9 +212,9 @@ function layers(now) {
     }),
     new deck.TextLayer({
       id: "labels", data: zd, getPosition: (d) => [d.center[0], d.center[1], (L.pressure ? elev(d) : 4) + 12],
-      getText: (d) => (live(d) ? `${d.name}\n${d.s.density.toFixed(1)} per m²` : `${d.name}\nno signal`),
-      characterSet: "auto", fontFamily: "Anek, sans-serif", fontWeight: 650, getSize: 15, lineHeight: 1.05,
-      getColor: [243, 234, 219, 255], background: true, getBackgroundColor: [36, 19, 15, 225], backgroundPadding: [8, 4],
+      getText: (d) => `${d.landmark ? `${d.landmark} - ` : ""}${d.name}\n${live(d) ? `${d.s.density.toFixed(1)} people/m2 - ${d.s.status === "safe" ? "Calm" : d.s.status === "warning" ? "Crowded" : d.s.status === "critical" ? "Crush risk" : "No signal"}` : "No signal"}`,
+      characterSet: "auto", fontFamily: "Anek, sans-serif", fontWeight: 650, getSize: 15, lineHeight: 1.12,
+      getColor: [243, 234, 219, 255], background: true, getBackgroundColor: [36, 19, 15, 238], backgroundPadding: [9, 6],
       getTextAnchor: "middle", getAlignmentBaseline: "bottom",
       updateTriggers: { getText: [tick, s.replayT], getPosition: [tick, s.replayT, L.pressure] },
     }),
@@ -223,7 +227,7 @@ export function initScene(cfg, onPickZone) {
     parent: document.getElementById("deck"),
     views: new deck.MapView({ repeat: false }),
     initialViewState: fit(cfg),
-    controller: { dragRotate: true, touchRotate: true, keyboard: false },
+    controller: { dragPan: true, dragRotate: true, touchRotate: true, scrollZoom: { speed: 0.01, smooth: true }, keyboard: false },
     layers: [],
     onHover: ({ object, layer }) => {
       const id = object && (layer?.id === "zones" || layer?.id === "pressure") ? object.id : null;
@@ -237,7 +241,7 @@ export function initScene(cfg, onPickZone) {
       if (!object || !(layer?.id === "zones" || layer?.id === "pressure") || !object.s) return null;
       const z = object.s;
       return {
-        text: z.offline ? `${object.name}\nCamera restarting` : `${object.name}\n${z.count} people, ${z.density.toFixed(1)} per m²\nClick for details`,
+        text: z.offline ? `${object.name} - No signal` : `${object.name} - ${z.density.toFixed(1)} people/m2 - ${z.status === "safe" ? "Calm" : z.status === "warning" ? "Crowded" : z.status === "critical" ? "Crush risk" : "No signal"}`,
         style: { background: "#f3eadb", color: "#24130f", font: "600 13px Anek, sans-serif", borderRadius: "6px", padding: "6px 10px" },
       };
     },
