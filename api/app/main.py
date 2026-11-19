@@ -26,11 +26,12 @@ from pydantic import BaseModel, Field, model_validator
 from pydantic_core import PydanticCustomError
 from redis.backoff import NoBackoff
 from redis.retry import Retry
+from redis.exceptions import WatchError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import core, k8s, security
 from .observability import ApiErrors, http_error, invalid_request, log, service_error
-from .report_schema import CameraReportRoute, Report
+from .report_schema import CameraReportRoute, Report, WorkerFault, WorkerUpdate
 
 BASE = Path(__file__).resolve().parent
 STATIC = BASE.parent / "static"
@@ -48,7 +49,6 @@ APP_VERSION = os.getenv("APP_VERSION", "v1")
 POD_NAME = os.getenv("POD_NAME", socket.gethostname())
 PUBLIC_URL = os.getenv("PUBLIC_URL", "").rstrip("/")
 MODE = os.getenv("MODE") or ("k8s" if k8s.in_cluster() else ("compose" if os.getenv("REDIS_URL") else "local"))
-PLATFORM = {"k8s": "Kubernetes", "compose": "Docker"}.get(MODE, "the operator")
 
 
 def _redis():
@@ -141,10 +141,26 @@ def _append_series(zone: str, now: float, d: Optional[float], count: int, status
     pipe.execute()
 
 
+def _worker_health(rec: dict | None, now: float) -> str:
+    if rec is None:
+        return "unseen"
+    age = now - rec["ts"]
+    if age > 2 * OFFLINE_AFTER:
+        return "disconnected"
+    if age > OFFLINE_AFTER:
+        return "stale"
+    if rec.get("fault"):
+        return rec["fault"]
+    if now - rec.get("observed_at", rec["ts"]) > OFFLINE_AFTER:
+        return "delayed"
+    return "healthy"
+
+
 def _zone_view(z: dict, now: float, t: core.Thresholds) -> dict:
     raw = R.get(f"zone:{z['id']}")
     rec = json.loads(raw) if raw else None
-    offline = rec is None or now - rec["ts"] > OFFLINE_AFTER
+    health = _worker_health(rec, now)
+    offline = health != "healthy"
     hist = _history(z["id"])
     return {
         "id": z["id"],
@@ -155,18 +171,22 @@ def _zone_view(z: dict, now: float, t: core.Thresholds) -> dict:
         "tip": z["tip"],
         "offline": offline,
         "last_seen": rec["ts"] if rec else None,
-        "count": rec["count"] if rec else 0,
-        "raw_detection_count": rec.get("raw_detection_count", rec["count"]) if rec else None,
-        "density": rec["density"] if rec else 0.0,
+        "worker_health": health,
+        "data_fresh": not offline,
+        "worker_started_at": rec.get("started_at") if rec else None,
+        "last_measurement_at": rec.get("measurement_at", rec["ts"]) if rec else None,
+        "count": rec["count"] if not offline else 0,
+        "raw_detection_count": rec.get("raw_detection_count", rec["count"]) if not offline else None,
+        "density": rec["density"] if not offline else 0.0,
         "status": "offline" if offline else rec["status"],
         "version": rec.get("version") if rec else None,
         "pod": rec.get("pod") if rec else None,
         "sim": rec.get("sim", False) if rec else False,
-        "fps": rec.get("fps", 0) if rec else 0,
-        "infer_ms": rec.get("infer_ms", 0) if rec else 0,
-        "flow": rec.get("flow", {}) if rec else {},
+        "fps": rec.get("fps", 0) if not offline else 0,
+        "infer_ms": rec.get("infer_ms", 0) if not offline else 0,
+        "flow": rec.get("flow", {}) if not offline else {},
         "points": rec.get("points", []) if (rec and not offline) else [],
-        "load_pct": int(round(core.load_ratio(rec["density"], t) * 100)) if rec else 0,
+        "load_pct": int(round(core.load_ratio(rec["density"], t) * 100)) if not offline else 0,
         "trend": [d for _, d in sorted(hist)[-60:]],
         "forecast": core.forecast(hist, now, t) if not offline else {"trend": "steady", "per_min": 0, "eta_s": None},
     }
@@ -254,7 +274,7 @@ def _watch_once() -> None:
             continue
         try:
             rec = json.loads(raw)
-            online = "1" if now - rec["ts"] <= OFFLINE_AFTER else "0"
+            online = "1" if _worker_health(rec, now) == "healthy" else "0"
         except (KeyError, TypeError, ValueError) as exc:
             service_error(exc, "watcher_invalid_state", zone=zone)
             continue
@@ -264,7 +284,7 @@ def _watch_once() -> None:
         if prev == b"1" and online == "0":
             log("warning", "camera_offline", zone=zone)
             R.set(f"offline_since:{zone}", now)
-            add_event("offline", f"{z['name']} camera stopped reporting. {PLATFORM} is restarting it.", zone)
+            add_event("offline", f"{z['name']} camera has no current measurement.", zone)
         elif prev == b"0" and online == "1":
             log("info", "camera_online", zone=zone)
             since = R.get(f"offline_since:{zone}")
@@ -358,7 +378,7 @@ def config(request: Request):
 
 # ---------- camera reports ----------
 
-def _validate_worker_identity(r: Report) -> None:
+def _validate_worker_identity(r: WorkerUpdate) -> None:
     if MODE == "compose" and r.pod != f"worker-{r.zone}":
         raise HTTPException(422, "Worker identity does not match the reported zone.")
     if MODE == "k8s":
@@ -375,42 +395,80 @@ camera_routes = APIRouter(route_class=CameraReportRoute)
 
 
 @camera_routes.post("/api/report")
-def report(r: Report, request: Request):
+def report(r: Report | WorkerFault, request: Request):
     z = _zone_or_404(r.zone)
     request.state.zone = r.zone
     _validate_worker_identity(r)
     try:
-        jpeg = r.jpeg()
+        jpeg = r.jpeg() if isinstance(r, Report) else None
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
     t = thresholds()
     now = time.time()
     if not isinstance(z.get("area_m2"), (int, float)) or not math.isfinite(z["area_m2"]) or z["area_m2"] <= 0:
         raise HTTPException(503, "Zone density area is not configured as a positive square-metre value.")
-    d = core.density(r.count, z["area_m2"])
-    st = core.status_for(d, t)
-    rec = {
-        "ts": now, "count": r.count, "raw_detection_count": r.raw_detection_count if r.raw_detection_count is not None else r.count,
-        "density": d, "status": st, "pod": r.pod,
-        "version": r.version, "sim": r.sim, "fps": r.fps, "infer_ms": r.infer_ms,
-        "flow": r.flow.model_dump(), "points": r.points,
-    }
-    pipe = R.pipeline()
-    pipe.set(f"status:{z['id']}", st, get=True)
-    pipe.set(f"zone:{z['id']}", json.dumps(rec))
-    pipe.lpush(f"hist:{z['id']}", f"{now:.2f}:{d}")
-    pipe.ltrim(f"hist:{z['id']}", 0, 179)
-    pipe.set(f"hb:worker:{r.pod}", json.dumps({"name": r.pod, "role": "worker", "zone": z["id"],
-                                              "state": "ready", "version": r.version}), ex=6)
-    if jpeg is not None:
-        pipe.set(f"frame:{z['id']}", jpeg, ex=10)
+    observed = r.observed_at or now
+    if observed > now + 1:
+        raise HTTPException(422, "Worker observation is in the future.")
+    observed = min(now, observed)
+    fault = r.fault if isinstance(r, WorkerFault) else None
+    if not fault and now - observed > OFFLINE_AFTER:
+        fault = "delayed"
+    zone_key = f"zone:{r.zone}"
     chaos_enabled = security.chaos_enabled()
-    if chaos_enabled:
-        pipe.getdel(f"kill:{z['id']}")
-        pipe.getdel(f"surge:{z['id']}")
-    results = pipe.execute()
-    prev = results[0].decode() if results[0] else None
+    with R.pipeline() as pipe:
+        pipe.watch(zone_key)
+        raw = pipe.get(zone_key)
+        previous = json.loads(raw) if raw else {}
+        previous_start = previous.get("started_at")
+        if previous_start is not None:
+            if r.started_at is None:
+                if now - previous["ts"] <= 2 * OFFLINE_AFTER:
+                    raise HTTPException(409, "Timestamped worker is active.")
+            elif (r.started_at < previous_start or
+                  (r.started_at == previous_start and
+                   (r.pod != previous["pod"] or r.observed_at <= previous["source_ts"]))):
+                raise HTTPException(409, "Superseded or repeated worker update.")
+        pipe.multi()
+        if fault:
+            rec = {"pod": r.pod, "version": r.version, "fault": fault,
+                   "measurement_at": previous.get("measurement_at", previous.get("ts"))}
+            st = "offline"
+            d = None
+        else:
+            d = core.density(r.count, z["area_m2"])
+            st = core.status_for(d, t)
+            rec = {
+                "ts": now, "count": r.count, "raw_detection_count": r.raw_detection_count if r.raw_detection_count is not None else r.count,
+                "density": d, "status": st, "pod": r.pod,
+                "version": r.version, "sim": r.sim, "fps": r.fps, "infer_ms": r.infer_ms,
+                "flow": r.flow.model_dump(), "points": r.points,
+            }
+            rec["measurement_at"] = observed
+            pipe.set(f"status:{r.zone}", st, get=True)
+            pipe.lpush(f"hist:{r.zone}", f"{observed:.2f}:{d}")
+            pipe.ltrim(f"hist:{r.zone}", 0, 179)
+        rec.update(ts=now, observed_at=observed, source_ts=r.observed_at, started_at=r.started_at)
+        pipe.set(zone_key, json.dumps(rec))
+        pipe.set(f"hb:worker:{r.pod}", json.dumps({"name": r.pod, "role": "worker", "zone": r.zone,
+                 "state": "ready" if not fault else "degraded", "version": r.version}), ex=6)
+        if previous_start and r.started_at and r.started_at != previous_start:
+            _queue_event(pipe, "restart", f"{z['name']} reporting from a new worker process.", r.zone)
+        if jpeg is not None and not fault:
+            pipe.set(f"frame:{r.zone}", jpeg, px=max(1, int((OFFLINE_AFTER - (now - observed)) * 1000)))
+        else:
+            pipe.delete(f"frame:{r.zone}")
+        if chaos_enabled:
+            pipe.getdel(f"kill:{r.zone}")
+            pipe.getdel(f"surge:{r.zone}")
+        try:
+            results = pipe.execute()
+        except WatchError:
+            raise HTTPException(409, "Concurrent worker update. Send the next observation.") from None
     kill, surge = map(bool, results[-2:]) if chaos_enabled else (False, False)
+    if fault:
+        return {"ok": True, "density": None, "status": st, "kill": kill, "surge": surge}
+    prev = results[0].decode() if results[0] else None
     _append_series(z["id"], now, d, r.count, st)
 
     if prev and prev != st:

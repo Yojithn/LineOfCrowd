@@ -2,11 +2,11 @@
 import base64
 import json
 import os
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import HTTPException, Request
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_core import PydanticCustomError
 
 from .security import require_worker
@@ -47,14 +47,33 @@ class Flow(BaseModel):
     opposing_s: NonNegative = 0.0
 
 
-class Report(BaseModel):
+class WorkerUpdate(BaseModel):
     model_config = ConfigDict(strict=True, allow_inf_nan=False, extra="forbid")
 
     zone: str = Field(min_length=1, max_length=63)
-    count: int = Field(ge=0, le=MAX_PERSON_COUNT)
-    raw_detection_count: int | None = Field(None, ge=0, le=MAX_PERSON_COUNT)
     pod: str = Field(max_length=253, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9.-]*$")
     version: str = Field(max_length=128, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._+-]*$")
+    started_at: float | None = Field(None, gt=0)
+    observed_at: float | None = Field(None, gt=0)
+
+    @model_validator(mode="after")
+    def ordered_timestamps(self):
+        if (self.started_at is None) != (self.observed_at is None):
+            raise ValueError("Provide both worker start and observation timestamps.")
+        if self.observed_at is not None and self.observed_at < self.started_at:
+            raise ValueError("Observation predates worker start.")
+        return self
+
+
+class WorkerFault(WorkerUpdate):
+    fault: Literal["no_frames", "processing_error"]
+    started_at: float = Field(gt=0)
+    observed_at: float = Field(gt=0)
+
+
+class Report(WorkerUpdate):
+    count: int = Field(ge=0, le=MAX_PERSON_COUNT)
+    raw_detection_count: int | None = Field(None, ge=0, le=MAX_PERSON_COUNT)
     sim: bool = False
     fps: NonNegative = 0.0
     infer_ms: NonNegative = 0.0

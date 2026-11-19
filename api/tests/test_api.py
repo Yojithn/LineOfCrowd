@@ -165,3 +165,59 @@ def test_state_has_everything_the_dashboard_needs():
     s = client.get("/api/state").json()
     for key in ("zones", "plans", "pods", "events", "incidents", "thresholds", "served_by", "totals"):
         assert key in s
+
+def test_heartbeat_boundaries_recovery_and_isolation(monkeypatch):
+    from app import main
+    from types import SimpleNamespace
+
+    now = 1000.0
+    monkeypatch.setattr(main, "time", SimpleNamespace(time=lambda: now))
+    assert report(started_at=900, observed_at=now).is_success
+
+    def gate():
+        return main._zone_view(main.ZONES["gate"], now, main.DEFAULT_T)
+
+    now += main.OFFLINE_AFTER
+    assert gate()["worker_health"] == "healthy"
+    now += 0.001
+    assert gate()["worker_health"] == "stale"
+    assert gate()["count"] == 0 and gate()["raw_detection_count"] is None
+    now += main.OFFLINE_AFTER
+    assert report("stage", started_at=900, observed_at=now).is_success
+    assert gate()["worker_health"] == "disconnected"
+    assert main.build_state()["totals"]["cameras_online"] == 1
+    assert report(started_at=900, observed_at=now).is_success
+    assert gate()["data_fresh"]
+
+
+def test_restart_fences_prior_process_and_duplicate_observations():
+    import time
+
+    now = time.time()
+    assert report(started_at=now-100, observed_at=now-1).is_success
+    assert report(started_at=now-0.5, observed_at=now).is_success
+    for start, observed in [(now-100, now), (now-0.5, now), (now-0.5, now-0.1)]:
+        assert report(count=99, started_at=start, observed_at=observed).status_code == 409
+    assert R.llen("hist:gate") == 2
+    assert sum(e["kind"] == "restart" for e in client.get("/api/state").json()["events"]) == 1
+
+
+def test_fault_and_delayed_measurements_do_not_publish_density():
+    import time
+
+    now = time.time()
+    assert report(count=99, started_at=now-30, observed_at=now-20).is_success
+    def gate():
+        return client.get("/api/state").json()["zones"][0]
+    assert gate()["worker_health"] == "delayed"
+    body = dict(zone="gate", pod="worker-gate-abc", version="v1", started_at=now-30)
+    for offset, fault in enumerate(("no_frames", "processing_error")):
+        response = client.post("/api/report", json=body | dict(observed_at=now-5+offset, fault=fault),
+                               headers={"Authorization": "Bearer test-worker-key"})
+        assert response.is_success
+        assert gate()["worker_health"] == fault
+        assert gate()["offline"] and gate()["last_measurement_at"] is None
+    assert R.llen("hist:gate") == 0
+    assert report(started_at=now-30, observed_at=now+100).status_code == 422
+    assert report(started_at=now-30, observed_at=now).is_success
+    assert gate()["worker_health"] == "healthy"
