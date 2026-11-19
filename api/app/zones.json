@@ -1,0 +1,48 @@
+{
+  "venue": {
+    "name": "Mysuru Palace grounds",
+    "event": "Dasara night",
+    "center": [76.6551, 12.3051],
+    "palace": { "size_m": [110, 64], "height_m": 34, "dome_m": 58 },
+    "wall": { "min_m": [-190, -250], "max_m": [370, 250] }
+  },
+  "thresholds": {
+    "warning": 2.0,
+    "critical": 4.0
+  },
+  "offline_after_s": 4,
+  "zones": [
+    {
+      "id": "gate",
+      "name": "Main gate",
+      "offset_m": [320, 0],
+      "size_m": [60, 90],
+      "area_m2": 18,
+      "tip": "Hold entry for two minutes and open the side gate."
+    },
+    {
+      "id": "stage",
+      "name": "Front stage",
+      "offset_m": [150, 10],
+      "size_m": [150, 130],
+      "area_m2": 30,
+      "tip": "Pause the stage programme and ask people to step back."
+    },
+    {
+      "id": "food",
+      "name": "Food court",
+      "offset_m": [150, -175],
+      "size_m": [120, 70],
+      "area_m2": 20,
+      "tip": "Close the food court queue and redirect to the side lanes."
+    },
+    {
+      "id": "exit",
+      "name": "Exit road",
+      "offset_m": [110, 195],
+      "size_m": [200, 50],
+      "area_m2": 25,
+      "tip": "Open both exit lanes and stop inbound traffic."
+    }
+  ]
+}

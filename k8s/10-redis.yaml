@@ -1,0 +1,35 @@
+# Redis holds the latest reading from every camera, shared by both API pods.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: crowdsentinel
+  labels: { app.kubernetes.io/part-of: crowdsentinel, role: redis }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { role: redis }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/part-of: crowdsentinel, role: redis }
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args: ["--save", "", "--appendonly", "no"]
+          ports: [{ containerPort: 6379 }]
+          readinessProbe:
+            tcpSocket: { port: 6379 }
+            periodSeconds: 3
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { cpu: 500m, memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: crowdsentinel
+spec:
+  selector: { role: redis }
+  ports: [{ port: 6379, targetPort: 6379 }]

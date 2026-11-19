@@ -1,0 +1,66 @@
+name: CrowdSentinel pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version label to release (shown on the dashboard)"
+        required: true
+        default: "v2"
+      broken:
+        description: "Ship a broken model on purpose to show the automatic rollback"
+        type: boolean
+        default: false
+
+# Only one release at a time touches the cluster.
+concurrency:
+  group: crowdsentinel-release
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: pip install -r api/requirements.txt -r worker/requirements.txt pytest httpx
+      - name: API tests (density, alerts, forecast, chaos, pipeline)
+        working-directory: api
+        run: python -m pytest -q
+      - name: Camera tests (tracking and crowd flow)
+        working-directory: worker
+        run: python -m pytest -q
+
+  build-and-scan:
+    name: Build images and scan for vulnerabilities
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build images
+        run: |
+          docker build -t crowdsentinel-api:ci api
+          docker build -t crowdsentinel-worker:ci worker
+      - name: Install Trivy
+        run: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+      - name: Scan images (report only; change exit-code to 1 to block releases)
+        run: |
+          trivy image --severity CRITICAL,HIGH --ignore-unfixed --exit-code 0 crowdsentinel-api:ci
+          trivy image --severity CRITICAL,HIGH --ignore-unfixed --exit-code 0 crowdsentinel-worker:ci
+
+  deploy:
+    name: Release to the Kubernetes cluster
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: self-hosted   # the laptop running the kind cluster (see README, "Connect GitHub Actions")
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rolling update with automatic rollback
+        run: python scripts/cs.py deploy --version "${{ inputs.version || github.sha }}" --run-id "gh-${{ github.run_number }}" --tests-passed ${{ inputs.broken && '--broken' || '' }} ${{ github.event_name == 'push' && '--build' || '' }}

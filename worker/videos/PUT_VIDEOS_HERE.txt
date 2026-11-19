@@ -1,0 +1,7 @@
+Put one crowd video per camera here, named after the zone:
+
+  gate.mp4    stage.mp4    food.mp4    exit.mp4
+
+Any camera without a video runs a simulated feed instead, so the demo still works.
+Free clips: search "crowd", "festival crowd" or "people walking from above" on Pexels or Pixabay.
+Clips filmed from high up give the best counts. Keep each under about 30 MB so GitHub accepts them.

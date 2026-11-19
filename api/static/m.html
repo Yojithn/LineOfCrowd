@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#24130f">
+  <link rel="icon" href="data:,">
+  <title>CrowdSentinel volunteer</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/m.css">
+</head>
+<body class="phone">
+  <main class="m">
+    <header class="m-top">
+      <div><h1>CrowdSentinel</h1><span class="kn" lang="kn">ಸ್ವಯಂಸೇವಕ</span></div>
+      <span class="conn" id="conn" data-conn="connecting">Connecting…</span>
+    </header>
+
+    <div class="tabs" role="tablist" aria-label="Volunteer tools">
+      <button role="tab" id="tab-zone-btn" aria-selected="true" aria-controls="tab-zone" data-tab="zone">My zone</button>
+      <button role="tab" id="tab-break-btn" aria-selected="false" aria-controls="tab-break" data-tab="break">Break it</button>
+    </div>
+
+    <section id="tab-zone" role="tabpanel" aria-labelledby="tab-zone-btn">
+      <p class="label">Where are you standing?</p>
+      <div class="chips" id="chips"></div>
+      <div class="hero" id="hero" data-s="safe" aria-live="assertive">
+        <span class="where" id="where">Pick your zone above</span>
+        <strong class="word big" id="word">--</strong>
+        <span class="fig" id="fig"></span>
+        <svg class="meter" viewBox="0 0 300 14" aria-hidden="true"><rect x="0" y="5" width="300" height="4" rx="2" fill="#3f271e"/><rect id="meter" x="0" y="5" width="0" height="4" rx="2"/></svg>
+      </div>
+      <ol class="todo" id="todo"></ol>
+      <button class="btn go wide" id="respond" hidden>I'm on my way</button>
+      <p class="note" id="respond-note" hidden></p>
+    </section>
+
+    <section id="tab-break" role="tabpanel" aria-labelledby="tab-break-btn" hidden>
+      <h2>Try to break CrowdSentinel</h2>
+      <p class="lede">Press and hold to crash a camera. Then look at the big screen: its pod shatters, the feed goes to static, and Kubernetes brings it back on its own.</p>
+      <div id="targets" class="targets"></div>
+      <div class="score" id="score" hidden>
+        <span class="label">Your camera came back in</span>
+        <strong class="big" id="score-n">0.0 s</strong>
+        <span class="label" id="best"></span>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="/static/js/m.js"></script>
+</body>
+</html>

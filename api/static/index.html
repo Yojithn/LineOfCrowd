@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#24130f">
+  <link rel="icon" href="data:,">
+  <title>CrowdSentinel control room</title>
+  <link rel="preload" href="/static/fonts/anek-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+  <div class="sindoor" aria-hidden="true"></div>
+
+  <!-- start screen: the palace lights come on when monitoring starts -->
+  <section class="boot" id="boot" aria-labelledby="boot-title">
+    <div class="in">
+      <svg id="boot-palace" viewBox="0 0 620 150" aria-hidden="true"></svg>
+      <h2 id="boot-title">CrowdSentinel</h2>
+      <p>Crowd-crush early warning for Mysuru Dasara</p>
+      <ul id="boot-checks">
+        <li data-k="api">Connecting to the control server</li>
+        <li data-k="cams">Waiting for camera feeds</li>
+        <li data-k="pods">Checking the cluster</li>
+      </ul>
+      <button class="btn go" id="start">Start monitoring</button>
+      <small>Starting turns on voice alerts. Press <kbd>Enter</kbd> to start, <kbd>?</kbd> for shortcuts.</small>
+    </div>
+  </section>
+
+  <div class="app">
+    <header class="bar">
+      <div class="mark"><h1>CrowdSentinel</h1><span class="kn" lang="kn">ಮೈಸೂರು ದಸರಾ</span></div>
+      <div class="verdict" id="verdict" data-s="safe" role="status" aria-live="polite"><span class="lamp"></span><p id="verdict-text">Connecting…</p></div>
+      <div class="totals">
+        <div class="total"><b id="t-people">0</b><span>people in view</span></div>
+        <div class="total"><b id="t-cams">0/4</b><span>cameras live</span></div>
+        <div class="total"><b id="t-pods">0/0</b><span>pods healthy</span></div>
+      </div>
+      <div class="served" id="served" title="The API pod sending this live stream. Delete it in the cluster panel and watch the stream move to the other one."><span>Live stream from</span><b id="served-by">connecting…</b></div>
+      <button class="cmdk" id="open-qr" aria-label="Show the volunteer QR code"><span>Phones</span><kbd>Q</kbd></button>
+      <button class="cmdk" id="open-palette" aria-label="Open command menu"><span>Search actions</span><kbd>Ctrl K</kbd></button>
+      <div class="clock" id="clock">--:--:--</div>
+    </header>
+
+    <nav class="ledger" aria-label="Zones">
+      <header><h2>Zones</h2><span class="label" id="levels">calm under 2, crush risk 4+ per m²</span></header>
+      <div class="zones" id="zones"></div>
+    </nav>
+
+    <main class="map" aria-label="3D map of Mysuru Palace grounds">
+      <div id="deck"></div>
+      <div class="replay-banner" id="replay-banner"><span id="replay-label">Replay</span><button id="to-live">Back to live</button></div>
+      <section class="alert" id="alert" role="alert" aria-live="assertive">
+        <div class="kicker"><span id="alert-kicker">Crush risk</span><span id="alert-age"></span></div>
+        <h3 id="alert-title"></h3>
+        <p id="alert-text"></p>
+        <ol id="alert-steps"></ol>
+        <div class="acts">
+          <button class="btn go" id="alert-ack">Acknowledge</button>
+          <button class="btn" id="alert-open">Open zone</button>
+          <button class="btn" id="alert-silence">Silence alarm</button>
+        </div>
+      </section>
+      <div class="map-tools">
+        <div class="seg" role="group" aria-label="Map layers" id="layers">
+          <button data-layer="pressure" aria-pressed="true">Pressure</button>
+          <button data-layer="heat" aria-pressed="false">Heat</button>
+          <button data-layer="people" aria-pressed="true">People</button>
+          <button data-layer="flow" aria-pressed="true">Flow</button>
+        </div>
+        <div class="seg" role="group" aria-label="Map view">
+          <button id="follow" aria-pressed="true" title="Fly to any zone that turns red">Follow alerts</button>
+          <button id="reset-view" aria-pressed="false">Reset view</button>
+        </div>
+      </div>
+      <div class="legend" aria-label="Legend">
+        <span data-s="safe"><i></i>Calm</span><span data-s="warning"><i></i>Crowded</span><span data-s="critical"><i></i>Crush risk</span>
+        <span>Column height = people per m²</span>
+      </div>
+      <div class="replay" aria-label="Replay the last 15 minutes">
+        <button class="live-pill" id="live-pill" title="Back to live">Live</button>
+        <div class="track" id="track" role="slider" tabindex="0" aria-label="Replay time" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100">
+          <svg id="track-svg" preserveAspectRatio="none"></svg>
+          <div class="handle" id="track-handle" style="left:100%"></div>
+          <div class="tip" id="track-tip"></div>
+        </div>
+        <div class="track-meta"><span id="track-span">last 15 min</span><br><span>drag to replay</span></div>
+      </div>
+    </main>
+
+    <section class="cams" id="cams" aria-label="Camera feeds">
+      <aside class="drawer" id="drawer" aria-label="Zone details" aria-hidden="true" tabindex="-1"></aside>
+    </section>
+
+    <section class="dock">
+      <div class="panel">
+        <header><h2>Incidents</h2><span class="label" id="inc-count">none open</span></header>
+        <div class="scroll" id="incidents"></div>
+      </div>
+      <div class="panel">
+        <header><h2>Cluster</h2><span class="label" id="pod-count"></span></header>
+        <div class="scroll"><div class="hive" id="hive"></div></div>
+      </div>
+      <div class="panel">
+        <header><h2>Release pipeline</h2><span class="label" id="pipe-ver">no release yet</span></header>
+        <div class="rail" id="rail"></div>
+        <div class="verdict-line" id="pipe-line"></div>
+        <header>
+          <span class="label">Activity</span>
+          <div class="filters" id="filters" role="group" aria-label="Filter activity">
+            <button data-f="all" aria-pressed="true">All</button>
+            <button data-f="alerts" aria-pressed="false">Alerts</button>
+            <button data-f="chaos" aria-pressed="false">Chaos</button>
+            <button data-f="release" aria-pressed="false">Releases</button>
+          </div>
+        </header>
+        <div class="scroll"><ul class="log" id="log" aria-live="polite"></ul></div>
+      </div>
+    </section>
+  </div>
+
+  <div class="inspector" id="inspector" role="dialog" aria-label="Pod details"></div>
+
+  <div class="scrim" id="scrim"></div>
+  <div class="dialog palette" id="palette" role="dialog" aria-modal="true" aria-label="Command menu">
+    <input id="palette-q" placeholder="Type a zone, a layer or an action…" autocomplete="off" aria-controls="palette-list" aria-autocomplete="list">
+    <ul id="palette-list" role="listbox"></ul>
+  </div>
+  <div class="dialog" id="settings" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="inner">
+      <h2 id="settings-title">Danger levels</h2>
+      <p class="lede">People per square metre at which a zone turns crowded or reaches crush risk. Changes apply to every screen within a second.</p>
+      <div class="slider"><label for="s-warn">Crowded from <b id="s-warn-v"></b></label><input type="range" id="s-warn" min="0.5" max="6" step="0.1"></div>
+      <div class="slider"><label for="s-crit">Crush risk from <b id="s-crit-v"></b></label><input type="range" id="s-crit" min="1" max="8" step="0.1"></div>
+      <p class="preview" id="s-preview"></p>
+      <div class="row-end"><button class="btn" id="s-reset">Reset to defaults</button><button class="btn" id="s-cancel">Cancel</button><button class="btn go" id="s-save">Save levels</button></div>
+    </div>
+  </div>
+  <div class="dialog" id="keys" role="dialog" aria-modal="true" aria-labelledby="keys-title">
+    <div class="inner">
+      <h2 id="keys-title">Keyboard shortcuts</h2>
+      <p class="lede">For running the demo without a mouse.</p>
+      <div class="keys">
+        <kbd>Ctrl K</kbd><span>Search every action</span>
+        <kbd>1–4</kbd><span>Open a zone</span>
+        <kbd>Shift 1–4</kbd><span>Surge drill at that zone (simulated cameras)</span>
+        <kbd>H P F C</kbd><span>Toggle heat, people, flow, pressure columns</span>
+        <kbd>← →</kbd><span>Step back and forward through the replay</span>
+        <kbd>L</kbd><span>Back to live</span>
+        <kbd>R</kbd><span>Reset the map view</span>
+        <kbd>M</kbd><span>Voice on or off</span>
+        <kbd>Q</kbd><span>Show the volunteer QR code</span>
+        <kbd>Esc</kbd><span>Close whatever is open</span>
+      </div>
+    </div>
+  </div>
+  <div class="dialog" id="qr-dialog" role="dialog" aria-modal="true" aria-labelledby="qr-title">
+    <div class="inner qr-inner">
+      <div class="qr-box"><img id="qr-img" alt="QR code that opens the volunteer page"></div>
+      <div>
+        <h2 id="qr-title">Scan to join</h2>
+        <p class="lede">Visitors and volunteers get their zone's status on their phone, and can try to crash a camera from the <b>Break it</b> tab.</p>
+        <p class="qr-url" id="qr-url"></p>
+        <p class="lede" id="qr-warn" hidden>Phones can't open localhost. Run <kbd>python scripts\cs.py up</kbd> while on the hotspot so this shows the laptop's Wi-Fi address.</p>
+      </div>
+    </div>
+  </div>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <template id="tpl-cam">
+    <button class="cam" data-s="safe">
+      <img alt="">
+      <div class="static"><canvas width="160" height="90"></canvas></div>
+      <div class="ring"></div>
+      <div class="hud">
+        <div><div><div class="nm"></div><div class="rec">Live</div></div><span class="chip">Calm</span></div>
+        <div><div><div class="n big">0<small>people</small></div><div class="sub"></div></div><div class="ver"></div></div>
+      </div>
+      <div class="lost"><div><b>No signal</b><span><span class="who">Kubernetes</span> is restarting this camera <span class="off-t">0.0 s</span></span></div></div>
+      <div class="healed"></div>
+      <span class="hint">Open zone</span>
+    </button>
+  </template>
+
+  <script src="/static/vendor/deck.min.js"></script>
+  <script type="module" src="/static/js/main.js"></script>
+</body>
+</html>

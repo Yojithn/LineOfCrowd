@@ -1,0 +1,49 @@
+# Plan B: runs everything without Kubernetes.  docker compose up --build
+# Open http://localhost:8080 . Crashed cameras come back because of "restart: always".
+
+x-worker: &worker
+  build: ./worker
+  image: crowdsentinel-worker:v1
+  restart: always
+  depends_on: [api]
+  healthcheck:
+    test: ["CMD", "python", "healthcheck.py"]
+    interval: 5s
+    timeout: 3s
+    retries: 3
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: always
+
+  api:
+    build: ./api
+    image: crowdsentinel-api:v1
+    restart: always
+    ports: ["8080:8080"]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      MODE: compose
+      PUBLIC_URL: ${PUBLIC_URL:-}
+    depends_on: [redis]
+
+  worker-gate:
+    <<: *worker
+    hostname: worker-gate
+    environment: { ZONE: gate, API_URL: "http://api:8080", VIDEO: /app/videos/gate.mp4, SIM_AUTOSURGE: "150" }
+
+  worker-stage:
+    <<: *worker
+    hostname: worker-stage
+    environment: { ZONE: stage, API_URL: "http://api:8080", VIDEO: /app/videos/stage.mp4 }
+
+  worker-food:
+    <<: *worker
+    hostname: worker-food
+    environment: { ZONE: food, API_URL: "http://api:8080", VIDEO: /app/videos/food.mp4 }
+
+  worker-exit:
+    <<: *worker
+    hostname: worker-exit
+    environment: { ZONE: exit, API_URL: "http://api:8080", VIDEO: /app/videos/exit.mp4 }
