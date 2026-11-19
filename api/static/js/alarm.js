@@ -1,7 +1,7 @@
-// Alarms: voice, siren, the red alert card, following the map to trouble, and noticing recoveries.
-import { store } from "./store.js";
+// Alarms: observed risk, forecasts, audio and camera transitions.
+import { store, thresholds } from "./store.js";
 import { api } from "./api.js";
-import { $, h, duration, clock } from "./util.js";
+import { $, h, duration, forecastEta, WORD } from "./util.js";
 import { flyToZone, resetView } from "./scene.js";
 import { spotlight, healed, markOffline, offlineFor, platformName } from "./cameras.js";
 import { toast } from "./toast.js";
@@ -40,7 +40,7 @@ function siren() {
 }
 
 export function silence() {
-  if (!document.body.classList.contains("alarm") && !$("#alert").classList.contains("on")) return false;
+  if ($("#alert-response").hidden || silenced) return false;
   silenced = true;
   document.body.classList.remove("alarm");
   if ("speechSynthesis" in window) speechSynthesis.cancel();
@@ -58,7 +58,6 @@ export function initAlarm(pick) {
     silence();
   });
   store.subscribe((s) => { if (s.live) { transitions(s); renderAlert(s); } });
-  setInterval(() => { const s = store.get(); if (s.live) renderAlert(s); }, 1000);
 }
 
 function transitions(s) {
@@ -100,25 +99,69 @@ function transitions(s) {
 
 function renderAlert(s) {
   const L = s.live;
-  const crit = L.zones.filter((z) => !z.offline && z.status === "critical").sort((a, b) => b.density - a.density);
+  const t = thresholds(s);
+  const active = L.zones.filter((z) => !z.offline);
+  const critical = active.filter((z) => z.status === "critical").sort((a, b) => b.density - a.density);
+  const crowded = active.filter((z) => z.status === "warning").sort((a, b) => b.density - a.density);
+  const observed = [...critical, ...crowded];
+  const stale = s.conn === "lost";
+  const forecasts = stale ? [] : active
+    .map((zone) => ({ zone, eta: forecastEta(zone) }))
+    .filter(({ eta }) => eta != null)
+    .sort((a, b) => a.eta - b.eta);
+  const [z, ...others] = observed;
   const box = $("#alert");
-  if (!crit.length) {
-    if (box.classList.contains("on") && s.prefs.follow && prev.focus && s.replayT == null) resetView();
-    box.classList.remove("on");
-    document.body.classList.remove("alarm");
+  box.hidden = !z && !forecasts.length;
+  box.dataset.s = critical.length ? "critical" : "warning";
+  box.dataset.zone = z?.id || "";
+  $("#alert-observed").hidden = !z;
+  $("#alert-predicted").hidden = !forecasts.length;
+  $("#forecast-level").textContent = t.critical;
+  $("#alert-forecasts").replaceChildren(...forecasts.map(({ zone, eta }) =>
+    h("li", {}, h("b", {}, zone.name), h("span", {}, `About ${duration(Math.ceil(eta))}`))));
+
+  const timing = stale ? "Last reported" : "Observed";
+  announce("#critical-announcement", critical.map((zone) => `${timing} crush risk at ${zone.name}.`).sort().join(" "));
+  announce("#warning-announcement", [
+    ...crowded.map((zone) => `${timing} crowding at ${zone.name}.`),
+    ...forecasts.map(({ zone }) => `Crush risk forecast for ${zone.name}.`),
+  ].sort().join(" "));
+  if (!critical.length) {
+    if (s.prefs.follow && prev.focus && s.replayT == null) resetView();
     prev.focus = null;
-    return;
+    silenced = false;
   }
-  const z = crit[0];
+  document.body.classList.toggle("alarm", Boolean(critical.length) && !silenced);
+  $("#alert-response").hidden = !critical.length;
+  box.dataset.incident = "";
+  if (!z) return;
+
+  $("#alert-kicker").textContent = stale ? "Last reported · stream disconnected" : "Live observation";
+  $("#alert-title").textContent = `${WORD[z.status]} at ${z.name}`;
+  $("#alert-text").textContent = `${densityReason(z, t)} · ${z.count.toLocaleString()} people in view`;
+  $("#alert-other").hidden = !others.length;
+  $("#alert-other").replaceChildren(...others.map((zone) =>
+    h("li", { "data-s": zone.status }, h("b", {}, `${WORD[zone.status]} at ${zone.name}`),
+      h("span", {}, densityReason(zone, t)))));
+  if (critical.length) renderResponse(L, z);
+  else $("#alert-age").textContent = "";
+}
+
+function announce(selector, message) {
+  const el = $(selector);
+  if (el.textContent !== message) el.textContent = message;
+}
+
+function densityReason(z, t) {
+  return `${z.density.toFixed(2)} people/m² · threshold ${t[z.status]}`;
+}
+
+function renderResponse(L, z) {
   const plan = (L.plans || []).find((p) => p.from === z.id);
   const inc = (L.incidents || []).find((i) => i.zone === z.id && i.state !== "resolved");
-  box.dataset.zone = z.id;
-  box.dataset.incident = inc?.id || "";
-  $("#alert-kicker").textContent = inc ? `${inc.id}, ${inc.state}` : "Crush risk";
-  $("#alert-age").textContent = inc ? `open ${duration(L.now - inc.opened_at)}` : clock(L.now);
-  $("#alert-title").textContent = `Crush risk at ${z.name}`;
-  $("#alert-text").textContent = `${z.density.toFixed(1)} people per m²${z.forecast?.trend === "rising" ? " and rising" : ""}. ${z.count} people in this camera's view.${crit.length > 1 ? ` ${crit.length - 1} more zone${crit.length > 2 ? "s" : ""} at crush risk.` : ""}`;
-  const steps = [z.tip];
+  $("#alert").dataset.incident = inc?.id || "";
+  $("#alert-age").textContent = inc ? `${inc.id} · ${inc.state} · ${duration(L.now - inc.opened_at)}` : "";
+  const steps = z.tip ? [z.tip] : [];
   if (plan) steps.push(`Send people to ${plan.to_name}, which is ${plan.to_load_pct}% full.`);
   if ((z.flow?.counterflow || 0) >= 0.55) steps.push("Groups are pushing in opposite directions here. Stop the inbound stream first.");
   const key = steps.join("|");
@@ -129,6 +172,4 @@ function renderAlert(s) {
   const ack = $("#alert-ack");
   ack.disabled = !inc || inc.state !== "open";
   ack.textContent = inc && inc.state !== "open" ? "Acknowledged" : "Acknowledge";
-  box.classList.add("on");
-  document.body.classList.toggle("alarm", !silenced);
 }

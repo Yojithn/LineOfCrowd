@@ -97,10 +97,13 @@ function renderHeader(s) {
   const off = L.zones.filter((z) => z.offline).length;
   let text = "All zones calm";
   if (crit.length) text = `Crush risk at ${names(crit)}`;
-  else if (warn.length) text = `${names(warn)} ${warn.length > 1 ? "are" : "is"} getting crowded`;
+  else if (warn.length) text = `Crowded at ${names(warn)}`;
   else if (off) text = `${off} camera${off > 1 ? "s" : ""} restarting, the rest are calm`;
-  $("#verdict").dataset.s = L.overall === "degraded" ? "offline" : L.overall;
-  $("#verdict-text").textContent = text;
+  const stale = s.conn === "lost";
+  const verdict = $("#verdict-text");
+  if (stale) text = "Live stream disconnected";
+  $("#verdict").dataset.s = stale || L.overall === "degraded" ? "offline" : L.overall;
+  if (verdict.textContent !== text) verdict.textContent = text;
   tween($("#t-people"), L.totals.people, 0);
   $("#t-cams").textContent = `${L.totals.cameras_online}/${L.totals.cameras}`;
   $("#served-by").textContent = L.served_by;

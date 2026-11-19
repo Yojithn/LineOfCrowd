@@ -43,25 +43,38 @@
       <div class="clock" id="clock">--:--:--</div>
     </header>
 
+    <section class="alert" id="alert" aria-label="Crowd alerts" hidden>
+      <div class="observed" id="alert-observed">
+        <div class="kicker"><span id="alert-kicker"></span><span id="alert-age"></span></div>
+        <h3 id="alert-title"></h3>
+        <p id="alert-text"></p>
+        <div class="alert-response" id="alert-response" hidden>
+          <ol id="alert-steps"></ol>
+          <div class="acts">
+            <button class="btn go" id="alert-ack">Acknowledge</button>
+            <button class="btn" id="alert-silence">Silence alarm</button>
+          </div>
+        </div>
+        <ul id="alert-other" class="alert-list" hidden></ul>
+        <button class="btn alert-open" id="alert-open">Open zone</button>
+      </div>
+      <div class="predicted" id="alert-predicted" hidden>
+        <h3>Forecast · Crush risk</h3>
+        <p>Estimated time to <span id="forecast-level"></span> people/m² if the trend holds.</p>
+        <ul id="alert-forecasts" class="alert-list"></ul>
+      </div>
+    </section>
+    <div class="sr" id="critical-announcement" role="alert"></div>
+    <div class="sr" id="warning-announcement" role="status"></div>
+
     <nav class="ledger" aria-label="Zones">
-      <header><h2>Zones</h2><span class="label" id="levels">calm under 2, crush risk 4+ per m²</span></header>
+      <header><h2>Zones</h2><span class="label" id="levels"></span></header>
       <div class="zones" id="zones"></div>
     </nav>
 
     <main class="map" aria-label="3D map of Mysuru Palace grounds">
       <div id="deck"></div>
       <div class="replay-banner" id="replay-banner"><span id="replay-label">Replay</span><button id="to-live">Back to live</button></div>
-      <section class="alert" id="alert" role="alert" aria-live="assertive">
-        <div class="kicker"><span id="alert-kicker">Crush risk</span><span id="alert-age"></span></div>
-        <h3 id="alert-title"></h3>
-        <p id="alert-text"></p>
-        <ol id="alert-steps"></ol>
-        <div class="acts">
-          <button class="btn go" id="alert-ack">Acknowledge</button>
-          <button class="btn" id="alert-open">Open zone</button>
-          <button class="btn" id="alert-silence">Silence alarm</button>
-        </div>
-      </section>
       <div class="map-tools">
         <div class="seg" role="group" aria-label="Map layers" id="layers">
           <button data-layer="pressure" aria-pressed="true">Pressure</button>
