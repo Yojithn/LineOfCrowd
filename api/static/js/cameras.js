@@ -85,7 +85,7 @@ function refreshFrames() {
           t.img.src = url;
           if (t.url) URL.revokeObjectURL(t.url);
           t.url = url;
-          document.dispatchEvent(new CustomEvent("frame", { detail: { id: z.id, url } }));
+          document.dispatchEvent(new CustomEvent("frame", { detail: { id: z.id, url, at: Date.now() } }));
         };
         img.src = url;
       })
