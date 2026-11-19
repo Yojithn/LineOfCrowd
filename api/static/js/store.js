@@ -37,7 +37,7 @@ export function zonesView(s = state) {
     let i = series.length - 1;
     while (i > 0 && series[i][0] > t) i--;
     const p = series[i];
-    const upto = series.slice(Math.max(0, i - 59), i + 1).map((q) => q[1] ?? 0);
+    const upto = series.slice(Math.max(0, i - 59), i + 1).map((q) => q[1]);
     if (!p) return { ...z, density: 0, count: 0, status: "offline", offline: true, points: [], flow: {}, trend: [] };
     const offline = p[3] === "offline" || p[1] == null;
     return {

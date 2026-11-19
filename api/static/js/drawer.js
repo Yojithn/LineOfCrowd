@@ -2,7 +2,7 @@
 // the open incident for this zone, and the actions an operator can take.
 import { store, thresholds } from "./store.js";
 import { api } from "./api.js";
-import { $, h, WORD, clock, clamp, duration, esc, shortPod, tween } from "./util.js";
+import { $, h, WORD, TREND, clock, clamp, duration, forecastEta, esc, shortPod, tween } from "./util.js";
 import { toast } from "./toast.js";
 import { flyToZone } from "./scene.js";
 
@@ -90,7 +90,7 @@ function build(zc) {
 
 async function surge(zc) {
   const r = await api.post(`/api/chaos/surge/${zc.id}`);
-  toast(r.ok ? `Surge drill started at ${zc.name}. Crush risk in about 30 s.` : r.message, !r.ok);
+  toast(r.ok ? `Surge drill started at ${zc.name}` : r.message, !r.ok);
 }
 
 async function crash(zc) {
@@ -205,12 +205,11 @@ function render(s) {
   drawChart();
   drawRose(z);
   const f = z.forecast || {};
-  const t = thresholds(s);
-  el.fc.innerHTML = z.offline ? "" : z.status === "critical"
-    ? "<b>At crush risk now.</b> Follow the steps on the alert."
-    : f.eta_s != null && f.eta_s <= 600 && z.density >= t.warning * 0.75
-      ? `<b>Crush risk in about ${duration(f.eta_s)}</b> if the trend holds (${f.per_min > 0 ? "+" : ""}${f.per_min} per m² each minute).`
-      : `<b>${f.trend === "rising" ? "Rising slowly" : f.trend === "falling" ? "Easing" : "Steady"}.</b> No crush risk expected in the next 10 minutes.`;
+  const eta = forecastEta(z);
+  el.fc.textContent = z.offline ? "" : s.conn === "lost" ? "Forecast unavailable while the stream is disconnected."
+    : z.status === "critical" ? "Observed crush risk."
+    : eta != null ? `Forecast: crush risk in about ${duration(Math.ceil(eta))} if the trend holds.`
+    : `${TREND[f.trend] || "Trend unavailable"}. No current crush-risk forecast.`;
   el.ver.innerHTML = z.version ? `Camera software <b>${esc(z.version)}</b> on pod <b>${esc(shortPod(z.pod))}</b>` : "";
   el.surge.hidden = !z.sim;
 

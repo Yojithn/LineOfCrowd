@@ -22,6 +22,7 @@ export const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "
 export const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 export const WORD = { safe: "Calm", warning: "Crowded", critical: "Crush risk", offline: "No signal" };
+export const TREND = { rising: "Increasing", falling: "Easing", steady: "Steady" };
 export const COL = { safe: [61, 185, 166], warning: [255, 145, 36], critical: [255, 59, 48], offline: [138, 116, 97] };
 export const ZARI = [207, 163, 73];
 export const JASMINE = [243, 234, 219];
@@ -32,6 +33,11 @@ export function duration(s) {
   if (s < 60) return `${s} s`;
   const m = Math.floor(s / 60), r = s % 60;
   return r ? `${m} min ${r} s` : `${m} min`;
+}
+// The backend returns zero for a zone already at crush risk.
+export function forecastEta(z) {
+  const eta = z.forecast?.eta_s;
+  return !z.offline && z.status !== "critical" && Number.isFinite(eta) && eta > 0 ? eta : null;
 }
 export const names = (a) => (a.length <= 1 ? a.join("") : `${a.slice(0, -1).join(", ")} and ${a[a.length - 1]}`);
 export const shortPod = (p) => (p ? p.split("-").slice(-2).join("-") : "");
@@ -54,15 +60,17 @@ export function tween(el, to, decimals = 0, ms = 450) {
 
 /** SVG sparkline with the two danger levels drawn as dashed guides. */
 export function spark(values, t, color, w = 200, hgt = 34) {
-  const max = Math.max(t.critical * 1.25, ...values, 0.1);
+  const max = Math.max(t.critical * 1.25, ...values.filter(Number.isFinite));
   const y = (v) => (hgt - (v / max) * hgt).toFixed(1);
-  const pts = values.length > 1
-    ? values.map((v, i) => `${((i / (values.length - 1)) * w).toFixed(1)},${y(v ?? 0)}`).join(" ")
-    : `0,${hgt} ${w},${hgt}`;
+  const path = values.map((v, i) => {
+    if (!Number.isFinite(v)) return "";
+    const command = Number.isFinite(values[i - 1]) ? "L" : "M";
+    return `${command}${((i / (values.length - 1)) * w).toFixed(1)},${y(v)}`;
+  }).join(" ");
   return `<svg viewBox="0 0 ${w} ${hgt}" preserveAspectRatio="none" aria-hidden="true">
     <line x1="0" x2="${w}" y1="${y(t.critical)}" y2="${y(t.critical)}" stroke="#ff3b30" stroke-opacity=".5" stroke-dasharray="2 4" vector-effect="non-scaling-stroke"/>
     <line x1="0" x2="${w}" y1="${y(t.warning)}" y2="${y(t.warning)}" stroke="#ff9124" stroke-opacity=".35" stroke-dasharray="2 4" vector-effect="non-scaling-stroke"/>
-    <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.8" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg>`;
+    <path d="${path}" fill="none" stroke="${color}" stroke-width="1.8" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg>`;
 }
 
 export const rgb = (c, a = 1) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
