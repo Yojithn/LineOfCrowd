@@ -16,16 +16,22 @@ export function initSettings() {
   w.addEventListener("input", update);
   c.addEventListener("input", update);
   $("#s-cancel").addEventListener("click", closeModal);
-  $("#s-save").addEventListener("click", async () => {
-    const r = await api.put("/api/settings", { warning: +(+w.value).toFixed(1), critical: +(+c.value).toFixed(1) });
-    toast(r.ok ? "Danger levels saved for every screen" : r.message, !r.ok);
-    if (r.ok) closeModal();
-  });
-  $("#s-reset").addEventListener("click", async () => {
-    const r = await api.del("/api/settings");
-    toast(r.ok ? "Danger levels reset to the defaults" : r.message, !r.ok);
-    if (r.ok) closeModal();
-  });
+  const save = $("#s-save"), reset = $("#s-reset");
+  const submit = async (defaults) => {
+    if (save.disabled) return;
+    if (store.get().conn !== "live") return toast("Wait for live updates before changing danger levels.", true);
+    const prompt = defaults ? "Restore default danger levels for every screen?"
+      : "Apply these danger levels to every screen?";
+    if (!window.confirm(prompt)) return;
+    save.disabled = reset.disabled = true;
+    const r = defaults ? await api.del("/api/settings")
+      : await api.put("/api/settings", { warning: +(+w.value).toFixed(1), critical: +(+c.value).toFixed(1) });
+    save.disabled = reset.disabled = false;
+    toast(r.ok ? (defaults ? "Default danger levels restored" : "Danger levels saved for every screen") : r.message, !r.ok);
+    if (r.ok && $("#settings").classList.contains("on")) closeModal();
+  };
+  save.addEventListener("click", () => submit(false));
+  reset.addEventListener("click", () => submit(true));
   initSettings.update = update;
 }
 

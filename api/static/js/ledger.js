@@ -3,6 +3,7 @@ import { store, zonesView, thresholds } from "./store.js";
 import { $, h, WORD, spark, TREND } from "./util.js";
 
 const rows = {};
+const priority = { critical: 0, warning: 1, offline: 2, safe: 3 };
 
 export function initLedger(cfg, onPick) {
   const box = $("#zones");
@@ -30,21 +31,26 @@ function render(s) {
   if (!s.live) return;
   const t = thresholds(s);
   $("#levels").textContent = `Crowded ≥ ${t.warning} · Crush risk ≥ ${t.critical} people/m²`;
-  for (const z of zonesView(s)) {
+  const box = $("#zones");
+  const zones = [...zonesView(s)].sort((a, b) => priority[a.status] - priority[b.status] ||
+    (a.status === "critical" || a.status === "warning" ? b.density - a.density : 0));
+  for (const [i, z] of zones.entries()) {
     const row = rows[z.id];
     if (!row) continue;
     const { el, status, density, count, chart, trend } = row;
+    if (!box.contains(document.activeElement) && box.children[i] !== el) box.insertBefore(el, box.children[i] || null);
+    const stale = s.conn !== "live" && s.replayT == null;
     const st = z.offline ? "offline" : z.status;
     el.dataset.s = st;
     el.setAttribute("aria-pressed", String(s.selected === z.id));
-    status.textContent = WORD[st];
+    status.textContent = stale ? "Delayed" : WORD[st];
     density.textContent = z.offline ? "—" : z.density.toFixed(2);
     count.textContent = z.offline ? "—" : z.count.toLocaleString();
     const hasHistory = !z.offline && z.trend?.filter(Number.isFinite).length >= 2;
     chart.innerHTML = hasHistory ? spark(z.trend, t, "var(--c)") : "";
-    trend.textContent = z.offline ? "Feed unavailable"
+    trend.textContent = stale ? "Waiting for updates" : z.offline ? "Readings unavailable"
       : !hasHistory ? "Gathering history"
       : s.replayT != null ? "Replay"
-      : TREND[z.forecast?.trend] || "Trend unavailable";
+      : [TREND[z.forecast?.trend] || "Trend unavailable", z.flow?.counterflow_confirmed && "Counterflow"].filter(Boolean).join(" · ");
   }
 }

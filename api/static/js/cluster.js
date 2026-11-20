@@ -8,6 +8,7 @@ import { toast } from "./toast.js";
 const hexes = new Map();
 let seeded = false;
 let inspecting = null;
+let deleting = false;
 
 export function initCluster() {
   store.subscribe(render);
@@ -74,13 +75,20 @@ function fill() {
       h("dt", {}, "Version"), h("dd", {}, p.version || "n/a"), h("dt", {}, "Restarts"), h("dd", {}, String(p.restarts ?? 0)),
       h("dt", {}, "Age"), h("dd", {}, age)),
     h("p", {}, note),
-    ...(canDelete ? [h("button", { class: "btn danger", onclick: () => kill(p) }, "Delete this pod")] : []));
+    ...(canDelete ? [h("button", { class: "btn danger", disabled: deleting || s.conn !== "live", onclick: () => kill(p) }, "Delete this pod")] : []));
 }
 
 async function kill(p) {
+  if (deleting || store.get().conn !== "live" ||
+    !window.confirm("Delete " + p.name + "? This may briefly interrupt monitoring.")) return;
+  deleting = true;
+  fill();
   const r = await api.post(`/api/chaos/pod/${encodeURIComponent(p.name)}`);
   toast(r.ok ? `Deleted ${shortPod(p.name)}. Watch the replacement appear.` : r.message, !r.ok);
-  closeInspector();
+  deleting = false;
+  if (inspecting !== p.name) return;
+  if (r.ok) closeInspector();
+  else fill();
 }
 
 function render(s) {
@@ -111,7 +119,7 @@ function render(s) {
   }
   seeded = true;
   const ready = pods.filter((p) => p.state === "ready").length;
-  $("#pod-count").textContent = `${pods.length} pods, ${ready} healthy`;
-  $("#t-pods").textContent = `${ready}/${pods.length}`;
+  $("#pod-count").textContent = s.conn !== "live" ? "Last known inventory" : `${pods.length} pods, ${ready} healthy`;
+  $("#t-pods").textContent = s.conn !== "live" ? "—" : `${ready}/${pods.length}`;
   if (inspecting) fill();
 }

@@ -43,7 +43,14 @@ export function connect(onState, onConn) {
     poll();
     return;
   }
+  let watchdog;
   const es = new EventSource("/api/stream");
-  es.addEventListener("state", (e) => { onConn("live"); onState(JSON.parse(e.data)); });
+  es.addEventListener("state", (e) => {
+    onConn("live");
+    onState(JSON.parse(e.data));
+    clearTimeout(watchdog);
+    // The server sends snapshots every 700 ms. Detect a silent connection too.
+    watchdog = setTimeout(() => onConn("lost"), 5000);
+  });
   es.addEventListener("error", () => onConn("lost"));
 }

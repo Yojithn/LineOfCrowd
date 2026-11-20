@@ -103,14 +103,13 @@ function layers(now) {
   const byId = Object.fromEntries(zones.map((z) => [z.id, z]));
   const zd = G.zones.map((g) => ({ ...g, s: byId[g.id] }));
   const L = s.layers;
-  const pulse = reducedMotion() ? 1 : 0.5 + 0.5 * Math.sin(now / 170);
   const booting = bootAt && now - bootAt < 3400;
   const bulbKey = booting ? Math.round((now - bootAt) / 50) : bootAt ? "on" : "off";
   const dt = Math.min((performance.now() - lastStateAt) / 1000, 1.2);
   const statusOf = (z) => (z.s ? z.s.status : "offline");
   const live = (z) => z.s && !z.s.offline;
   const elev = (z) => (live(z) ? 4 + z.s.density * 16 : 3);
-  const tick = s.live?.now;
+  const tick = s.conn + ":" + s.live?.now;
 
   const people = [];
   if (L.people || L.heat) {
@@ -163,9 +162,9 @@ function layers(now) {
     new deck.PolygonLayer({
       id: "zones", data: zd, getPolygon: (d) => d.polygon, stroked: true, filled: true, pickable: true, lineWidthUnits: "pixels",
       getLineWidth: (d) => (d.id === s.selected ? 3.5 : d.id === hoverZone ? 2.5 : 1.7),
-      getFillColor: (d) => [...COL[statusOf(d)], statusOf(d) === "critical" ? 65 + 65 * pulse : d.id === s.selected ? 76 : d.id === hoverZone ? 68 : 48],
+      getFillColor: (d) => [...COL[statusOf(d)], statusOf(d) === "critical" ? 125 : d.id === s.selected ? 76 : d.id === hoverZone ? 68 : 48],
       getLineColor: (d) => (d.id === s.selected ? [...JASMINE, 255] : d.landmark ? [...ZARI, 240] : [...ZARI, 190]),
-      updateTriggers: { getFillColor: [tick, s.replayT, Math.round(pulse * 10), s.selected, hoverZone], getLineColor: [tick, s.replayT, s.selected], getLineWidth: [s.selected, hoverZone] },
+      updateTriggers: { getFillColor: [tick, s.replayT, s.selected, hoverZone], getLineColor: [tick, s.replayT, s.selected], getLineWidth: [s.selected, hoverZone] },
     }),
     new deck.PolygonLayer({
       id: "palace", data: G.palace, getPolygon: (d) => d.polygon, extruded: true, wireframe: true,
@@ -198,8 +197,8 @@ function layers(now) {
     }),
     L.flow && new deck.ScatterplotLayer({
       id: "turbulence", data: rings, getPosition: (d) => d.p, stroked: true, filled: false, radiusUnits: "meters",
-      getRadius: (d) => 26 + 10 * pulse, lineWidthUnits: "pixels", getLineWidth: 2,
-      getLineColor: (d) => [255, 59, 48, 120 + 120 * d.k], updateTriggers: { getRadius: Math.round(pulse * 10) },
+      getRadius: 32, lineWidthUnits: "pixels", getLineWidth: 2,
+      getLineColor: (d) => [255, 59, 48, 120 + 120 * d.k],
     }),
     L.flow && new deck.PathLayer({
       id: "flow", data: arrows, getPath: (d) => d.path, getColor: (d) => (d.hot ? [255, 120, 100, 245] : [243, 234, 219, 230]),
@@ -207,8 +206,8 @@ function layers(now) {
     }),
     new deck.ArcLayer({
       id: "redirect", data: plans, getSourcePosition: (d) => d.from.center, getTargetPosition: (d) => d.to.center,
-      getSourceColor: [...COL.critical, 255], getTargetColor: [...COL.safe, 255], getWidth: 4 + 3 * pulse, getHeight: 0.6,
-      widthUnits: "pixels", updateTriggers: { getWidth: Math.round(pulse * 8) },
+      getSourceColor: [...COL.critical, 255], getTargetColor: [...COL.safe, 255], getWidth: 5, getHeight: 0.6,
+      widthUnits: "pixels",
     }),
     new deck.TextLayer({
       id: "labels", data: zd, getPosition: (d) => [d.center[0], d.center[1], (L.pressure ? elev(d) : 4) + 12],
