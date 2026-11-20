@@ -9,6 +9,7 @@ const state = {
   layers: { pressure: false, heat: false, people: false, flow: false },
   prefs: { voice: true, follow: true },
   started: false,
+  receivedAt: 0,
   conn: "connecting",   // connecting | live | lost
   logFilter: "all",
 };
@@ -30,7 +31,10 @@ export const store = {
 /** The zones as they should be shown right now: live, or reconstructed from replay history. */
 export function zonesView(s = state) {
   const live = s.live?.zones || [];
-  if (s.replayT == null || !s.history) return live;
+  if (s.replayT == null || !s.history) {
+    if (s.conn === "live") return live;
+    return live.map((z) => ({ ...z, status: "offline", offline: true }));
+  }
   const t = s.replayT;
   return live.map((z) => {
     const series = s.history.zones[z.id] || [];
@@ -38,7 +42,7 @@ export function zonesView(s = state) {
     while (i > 0 && series[i][0] > t) i--;
     const p = series[i];
     const upto = series.slice(Math.max(0, i - 59), i + 1).map((q) => q[1]);
-    if (!p) return { ...z, density: 0, count: 0, status: "offline", offline: true, points: [], flow: {}, trend: [] };
+    if (!p || p[0] > t) return { ...z, density: 0, count: 0, status: "offline", offline: true, points: [], flow: {}, trend: [] };
     const offline = p[3] === "offline" || p[1] == null;
     return {
       ...z, density: p[1] ?? 0, count: p[2] ?? 0, status: offline ? "offline" : p[3], offline,

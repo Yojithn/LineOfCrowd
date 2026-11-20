@@ -10,8 +10,6 @@
   <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body>
-  <div class="sindoor" aria-hidden="true"></div>
-
   <!-- start screen: the palace lights come on when monitoring starts -->
   <section class="boot" id="boot" aria-labelledby="boot-title">
     <div class="in">
@@ -31,13 +29,13 @@
   <div class="app">
     <header class="bar">
       <div class="mark"><h1>CrowdSentinel</h1><span class="kn" lang="kn">ಮೈಸೂರು ದಸರಾ</span></div>
-      <div class="verdict" id="verdict" data-s="safe" role="status" aria-live="polite"><span class="lamp"></span><p id="verdict-text">Connecting…</p></div>
+      <div class="verdict" id="verdict" data-s="offline" role="status" aria-live="polite"><span class="lamp"></span><p id="verdict-text">Connecting…</p></div>
       <div class="totals">
-        <div class="total"><b id="t-people">0</b><span>people in view</span></div>
-        <div class="total"><b id="t-cams">0/4</b><span>cameras live</span></div>
-        <div class="total"><b id="t-pods">0/0</b><span>pods healthy</span></div>
+        <div class="total"><b id="t-people">—</b><span>people in view</span></div>
+        <div class="total"><b id="t-cams">—</b><span>workers processing</span></div>
+        <div class="total"><b id="t-pods">—</b><span>pods healthy</span></div>
       </div>
-      <div class="served" id="served" title="The API pod sending this live stream. Delete it in the cluster panel and watch the stream move to the other one."><span>Live stream from</span><b id="served-by">connecting…</b></div>
+      <div class="served" id="served" title="API pod serving the dashboard stream"><span>Live stream from</span><b id="served-by">connecting…</b></div>
       <button class="cmdk" id="open-qr" aria-label="Show the volunteer QR code"><span>Phones</span><kbd>Q</kbd></button>
       <button class="cmdk" id="open-palette" aria-label="Open command menu"><span>Search actions</span><kbd>Ctrl K</kbd></button>
       <div class="clock" id="clock">--:--:--</div>
@@ -83,7 +81,7 @@
           <button data-layer="flow" aria-pressed="false">Flow</button>
         </div>
         <div class="seg" role="group" aria-label="Map view">
-          <button id="follow" aria-pressed="true" title="Fly to any zone that turns red">Follow alerts</button>
+          <button id="follow" aria-pressed="true" title="Fly to a zone when it reaches crush risk">Follow alerts</button>
           <button id="reset-view" aria-pressed="false">Reset view</button>
         </div>
       </div>
@@ -103,6 +101,7 @@
     </main>
 
     <section class="cams" id="cams" aria-label="Camera feeds">
+      <header class="camera-heading"><h2>Cameras</h2><span class="label">Preview and processing</span></header>
       <div class="camera-grid" id="camera-grid"></div>
       <aside class="drawer" id="drawer" aria-label="Zone details" aria-hidden="true" tabindex="-1"></aside>
     </section>
@@ -190,7 +189,7 @@
   <template id="tpl-cam">
     <button class="cam" aria-controls="drawer" aria-pressed="false">
       <img alt="" hidden>
-      <span class="camera-caption"><strong class="nm"></strong><span class="camera-state">Connecting</span></span>
+      <span class="camera-caption"><strong class="nm"></strong><span class="camera-state" data-s="offline">Preview · Connecting</span><span class="worker-state" data-s="offline">Worker · Waiting</span></span>
       <span class="healed"></span>
     </button>
   </template>

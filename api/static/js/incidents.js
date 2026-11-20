@@ -13,18 +13,49 @@ export function initIncidents(pick) {
   setInterval(() => render(store.get()), 1000);   // keep "open for" timers ticking
 }
 
-async function act(inc, action, done) {
-  const r = await api.post(`/api/incidents/${inc.id}/${action}`, { by: "control room" });
-  toast(r.ok ? `${inc.id} ${done}` : r.message, !r.ok);
+const pending = new Map();
+const done = { ack: "acknowledged", respond: "marked as responding", resolve: "resolved" };
+export const incidentState = (state) => ({
+  open: "Needs acknowledgement", acknowledged: "Acknowledged", responding: "Responding", resolved: "Resolved",
+})[state] || state;
+
+export function incidentBusy(inc) {
+  return store.get().conn !== "live" || pending.get(inc.id) === inc.state;
+}
+
+export async function incidentAction(inc, action) {
+  const current = store.get().live?.incidents.find((i) => i.id === inc.id);
+  if (!current || current.state !== inc.state || incidentBusy(inc)) return false;
+  if (action === "resolve" && !window.confirm("Resolve " + inc.id + " at " + inc.zone_name + "? This closes the incident.")) return false;
+  if (action === "respond" && !window.confirm("Mark volunteers as responding to " + inc.id + " at " + inc.zone_name + "?")) return false;
+  pending.set(inc.id, inc.state);
+  store.set({});
+  const r = await api.post("/api/incidents/" + inc.id + "/" + action, { by: "control room" });
+  toast(r.ok ? inc.id + " " + done[action] : r.message, !r.ok);
+  const release = () => {
+    if (pending.get(inc.id) === inc.state) pending.delete(inc.id);
+    store.set({});
+  };
+  if (r.ok) setTimeout(release, 5000);
+  else release();
+  return r.ok;
+}
+
+export function incidentButtons(inc) {
+  const button = (action, label, style = "") => h("button", {
+    class: ("btn sm " + style).trim(), onclick: () => incidentAction(inc, action),
+  }, label);
+  const buttons = [];
+  if (inc.state === "open") buttons.push(button("ack", "Acknowledge", "go"));
+  if (["open", "acknowledged"].includes(inc.state)) buttons.push(button("respond", "Mark volunteers responding"));
+  if (inc.state !== "resolved") buttons.push(button("resolve", "Resolve incident", "danger"));
+  return buttons;
 }
 
 function card(inc) {
-  const btns = [];
-  if (inc.state === "open") btns.push(h("button", { class: "btn go sm", onclick: () => act(inc, "ack", "acknowledged") }, "Acknowledge"));
-  if (inc.state === "open" || inc.state === "acknowledged") btns.push(h("button", { class: "btn sm", onclick: () => act(inc, "respond", "has volunteers on the way") }, "Send volunteers"));
-  if (inc.state !== "resolved") btns.push(h("button", { class: "btn sm", onclick: () => act(inc, "resolve", "resolved") }, "Resolve"));
-  const title = h("h3", {}, h("button", { class: "linkish", style: "all:unset;cursor:pointer", onclick: () => onPick(inc.zone) }, `Crush risk at ${inc.zone_name}`),
-    h("span", { class: `state ${inc.state}` }, inc.state === "resolved" ? "resolved" : inc.state));
+  const btns = incidentButtons(inc);
+  const title = h("h3", {}, h("button", { class: "linkish", onclick: () => onPick(inc.zone) }, `Crush risk at ${inc.zone_name}`),
+    h("span", { class: `state ${inc.state}` }, incidentState(inc.state)));
   return h("article", { class: `inc${inc.state === "open" && !inc.eased ? " hot" : ""}` },
     h("div", {}, h("span", { class: "id" }, `${inc.id}, opened ${clock(inc.opened_at)}`), title),
     btns.length ? h("div", { class: "btns" }, ...btns) : null,
@@ -33,7 +64,8 @@ function card(inc) {
 }
 
 function render(s) {
-  const list = s.live?.incidents || [];
+  if (!s.live) return;
+  const list = s.live.incidents || [];
   const box = $("#incidents");
   const open = list.filter((i) => i.state !== "resolved").length;
   $("#inc-count").textContent = open ? `${open} open` : "none open";
@@ -43,7 +75,8 @@ function render(s) {
   }
   const seen = new Set();
   const order = [];
-  for (const inc of list) {
+  const priority = (i) => i.state === "resolved" ? 3 : i.eased ? 2 : i.state === "open" ? 0 : 1;
+  for (const inc of [...list].sort((a, b) => priority(a) - priority(b))) {
     const key = `${inc.state}:${inc.eased}:${inc.timeline.length}:${inc.peak_density}`;
     let c = cards.get(inc.id);
     if (!c || c.key !== key) {
@@ -52,7 +85,7 @@ function render(s) {
       c = { el, key, inc };
       cards.set(inc.id, c);
     }
-    c.inc = inc;
+    for (const button of c.el.querySelectorAll(".btns button")) button.disabled = incidentBusy(inc);
     const now = s.live.now;
     c.el.querySelector(".timer").textContent = inc.state === "resolved"
       ? `Took ${duration((inc.resolved_at || now) - inc.opened_at)}`

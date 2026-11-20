@@ -1,12 +1,12 @@
 // CrowdSentinel control room: wires the modules together.
 import { store } from "./store.js";
 import { api, connect } from "./api.js";
-import { $, $$, names, tween } from "./util.js";
+import { $, $$, clock, tween } from "./util.js";
 import { initScene, resetView, flyToZone, lightUp } from "./scene.js";
 import { initLedger } from "./ledger.js";
-import { initCameras } from "./cameras.js";
+import { initCameras, cameraDrill } from "./cameras.js";
 import { openDrawer, closeDrawer, drawerOpen } from "./drawer.js";
-import { initIncidents } from "./incidents.js";
+import { initIncidents, incidentAction } from "./incidents.js";
 import { initCluster, closeInspector } from "./cluster.js";
 import { initPipeline } from "./pipeline.js";
 import { initReplay, setReplay, goLive, step } from "./replay.js";
@@ -38,15 +38,6 @@ function setPref(k, v, msg) {
   if (k === "voice" && !v && "speechSynthesis" in window) speechSynthesis.cancel();
 }
 
-async function crash(z) {
-  const r = await api.post(`/api/chaos/kill/${z.id}?by=dashboard`);
-  toast(r.ok ? `Crashed the ${z.name} camera` : r.message, !r.ok);
-}
-async function surge(z) {
-  const r = await api.post(`/api/chaos/surge/${z.id}`);
-  toast(r.ok ? `Surge drill started at ${z.name}` : r.message, !r.ok);
-}
-
 function actions() {
   const s = store.get();
   const now = s.live?.now || Date.now() / 1000;
@@ -54,8 +45,8 @@ function actions() {
   for (const z of s.cfg.zones) {
     const sim = s.live?.zones.find((q) => q.id === z.id)?.sim;
     out.push({ title: `Open ${z.name}`, group: "Zone", run: () => openDrawer(z.id) });
-    out.push({ title: `Crash the ${z.name} camera`, group: "Chaos test", run: () => crash(z) });
-    if (sim) out.push({ title: `Surge drill at ${z.name}`, group: "Drill", run: () => surge(z) });
+    out.push({ title: `Crash the ${z.name} camera`, group: "Chaos test", run: () => cameraDrill(z, "kill") });
+    if (sim) out.push({ title: `Surge drill at ${z.name}`, group: "Drill", run: () => cameraDrill(z, "surge") });
   }
   for (const [k, label] of Object.entries(LAYER_NAMES)) {
     out.push({ title: `${s.layers[k] ? "Hide" : "Show"} ${label}`, group: "Map layer", run: () => toggleLayer(k) });
@@ -63,10 +54,7 @@ function actions() {
   for (const m of [2, 5, 10]) out.push({ title: `Replay ${m} minutes ago`, group: "Replay", run: () => setReplay(now - m * 60) });
   out.push({ title: "Back to live", group: "Replay", run: goLive });
   for (const inc of (s.live?.incidents || []).filter((i) => i.state !== "resolved")) {
-    out.push({ title: `Resolve ${inc.id} at ${inc.zone_name}`, group: "Incident", run: async () => {
-      const r = await api.post(`/api/incidents/${inc.id}/resolve`, { by: "control room" });
-      toast(r.ok ? `${inc.id} resolved` : r.message, !r.ok);
-    } });
+    out.push({ title: `Resolve ${inc.id} at ${inc.zone_name}`, group: "Incident", run: () => incidentAction(inc, "resolve") });
   }
   out.push(
     { title: "Change danger levels", group: "Settings", run: openSettings },
@@ -93,20 +81,25 @@ function openQR() {
 function renderHeader(s) {
   const L = s.live;
   if (!L) return;
-  const crit = L.zones.filter((z) => !z.offline && z.status === "critical").map((z) => z.name);
-  const warn = L.zones.filter((z) => !z.offline && z.status === "warning").map((z) => z.name);
-  const off = L.zones.filter((z) => z.offline).length;
-  let text = "All zones calm";
-  if (crit.length) text = `Crush risk at ${names(crit)}`;
-  else if (warn.length) text = `Crowded at ${names(warn)}`;
-  else if (off) text = `${off} camera${off > 1 ? "s" : ""} restarting, the rest are calm`;
-  const stale = s.conn === "lost";
+  const critical = L.zones.filter((z) => !z.offline && z.status === "critical").length;
+  const warning = L.zones.filter((z) => !z.offline && z.status === "warning").length;
+  const online = L.zones.filter((z) => !z.offline).length;
+  const stale = s.conn !== "live";
+  const risk = critical ? "critical" : warning ? "warning" : online < L.zones.length ? "offline" : "safe";
+  const text = stale ? "Updates delayed · last received " + clock(s.receivedAt / 1000)
+    : critical ? critical + (critical === 1 ? " zone at crush risk" : " zones at crush risk")
+    : warning ? warning + (warning === 1 ? " crowded zone" : " crowded zones")
+    : online < L.zones.length ? "Monitoring coverage reduced" : "All zones calm";
   const verdict = $("#verdict-text");
-  if (stale) text = "Live stream disconnected";
-  $("#verdict").dataset.s = stale || L.overall === "degraded" ? "offline" : L.overall;
+  $("#verdict").dataset.s = stale ? "offline" : risk;
   if (verdict.textContent !== text) verdict.textContent = text;
-  tween($("#t-people"), L.totals.people, 0);
-  $("#t-cams").textContent = `${L.totals.cameras_online}/${L.totals.cameras}`;
+  if (stale || !online) {
+    $("#t-people")._v = undefined;
+    $("#t-people").textContent = "—";
+  } else tween($("#t-people"), L.totals.people, 0);
+  $("#t-cams").textContent = stale ? "—" : online + "/" + L.zones.length;
+  $("#live-pill").textContent = s.replayT != null ? "Back to live" : stale ? "Delayed" : "Live";
+  $("#live-pill").dataset.s = stale ? "offline" : "safe";
   $("#served-by").textContent = L.served_by;
 }
 
@@ -123,7 +116,7 @@ function onKey(e) {
   const digit = /^Digit([1-9])$/.exec(e.code);
   if (digit) {
     const z = s.cfg.zones[+digit[1] - 1];
-    if (z) { if (e.shiftKey) surge(z); else openDrawer(z.id); }
+    if (z) { if (!e.shiftKey) openDrawer(z.id); else if (!e.repeat) cameraDrill(z, "surge"); }
     return;
   }
   if (e.target.closest("#track") && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
@@ -180,7 +173,7 @@ async function init() {
   store.subscribe(bootChecks);
   store.subscribe((s) => { $("#served").dataset.conn = s.conn; });
 
-  connect((live) => store.set({ live }), (conn) => { if (store.get().conn !== conn) store.set({ conn }); });
+  connect((live) => store.set({ live, receivedAt: Date.now() }), (conn) => { if (store.get().conn !== conn) store.set({ conn }); });
 
   $("#start").addEventListener("click", start);
   $("#open-palette").addEventListener("click", openPalette);

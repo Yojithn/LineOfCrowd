@@ -1,13 +1,13 @@
 // Alarms: observed risk, forecasts, audio and camera transitions.
 import { store, thresholds } from "./store.js";
-import { api } from "./api.js";
-import { $, h, duration, forecastEta, WORD } from "./util.js";
+import { incidentAction, incidentBusy, incidentState } from "./incidents.js";
+import { $, h, clock, duration, forecastEta, WORD } from "./util.js";
 import { flyToZone, resetView } from "./scene.js";
-import { spotlight, healed, markOffline, offlineFor, platformName } from "./cameras.js";
-import { toast } from "./toast.js";
+import { spotlight, healed, markOffline, offlineFor } from "./cameras.js";
 
 let audio = null;
 let silenced = false;
+const tones = new Set();
 const prev = { status: {}, offline: {}, pipeKey: null, seeded: false, focus: null };
 
 export function armAudio() {
@@ -35,6 +35,8 @@ function siren() {
   g.gain.setValueAtTime(0.09, t0 + 1.7);
   g.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.9);
   o.connect(g).connect(audio.destination);
+  tones.add(o);
+  o.onended = () => tones.delete(o);
   o.start(t0);
   o.stop(t0 + 1.95);
 }
@@ -42,7 +44,8 @@ function siren() {
 export function silence() {
   if ($("#alert-response").hidden || silenced) return false;
   silenced = true;
-  document.body.classList.remove("alarm");
+  for (const tone of tones) tone.stop();
+  $("#alert-silence").disabled = true;
   if ("speechSynthesis" in window) speechSynthesis.cancel();
   return true;
 }
@@ -53,11 +56,10 @@ export function initAlarm(pick) {
   $("#alert-ack").addEventListener("click", async () => {
     const iid = $("#alert").dataset.incident;
     if (!iid) return;
-    const r = await api.post(`/api/incidents/${iid}/ack`, { by: "control room" });
-    toast(r.ok ? `${iid} acknowledged` : r.message, !r.ok);
-    silence();
+    const inc = store.get().live?.incidents.find((i) => i.id === iid);
+    if (inc && await incidentAction(inc, "ack")) silence();
   });
-  store.subscribe((s) => { if (s.live) { transitions(s); renderAlert(s); } });
+  store.subscribe((s) => { if (s.live) { if (s.conn === "live") transitions(s); renderAlert(s, pick); } });
 }
 
 function transitions(s) {
@@ -75,7 +77,7 @@ function transitions(s) {
       }
       if (z.offline && wasOff === false) {
         markOffline(z.id);
-        speak(`${z.name} camera lost. ${platformName(L.mode)} is restarting it.`);
+        speak(z.name + " monitoring unavailable.");
       }
       if (!z.offline && wasOff === true) {
         const secs = offlineFor(z.id);
@@ -97,14 +99,17 @@ function transitions(s) {
   prev.seeded = true;
 }
 
-function renderAlert(s) {
+function renderAlert(s, pick) {
   const L = s.live;
   const t = thresholds(s);
   const active = L.zones.filter((z) => !z.offline);
-  const critical = active.filter((z) => z.status === "critical").sort((a, b) => b.density - a.density);
+  const incidents = new Map((L.incidents || []).filter((i) => i.state !== "resolved").map((i) => [i.zone, i]));
+  const acknowledged = (zone) => ["acknowledged", "responding"].includes(incidents.get(zone.id)?.state);
+  const critical = active.filter((z) => z.status === "critical").sort((a, b) =>
+    Number(acknowledged(a)) - Number(acknowledged(b)) || b.density - a.density);
   const crowded = active.filter((z) => z.status === "warning").sort((a, b) => b.density - a.density);
   const observed = [...critical, ...crowded];
-  const stale = s.conn === "lost";
+  const stale = s.conn !== "live";
   const forecasts = stale ? [] : active
     .map((zone) => ({ zone, eta: forecastEta(zone) }))
     .filter(({ eta }) => eta != null)
@@ -112,7 +117,7 @@ function renderAlert(s) {
   const [z, ...others] = observed;
   const box = $("#alert");
   box.hidden = !z && !forecasts.length;
-  box.dataset.s = critical.length ? "critical" : "warning";
+  box.dataset.s = critical.length ? "critical" : z ? "warning" : "info";
   box.dataset.zone = z?.id || "";
   $("#alert-observed").hidden = !z;
   $("#alert-predicted").hidden = !forecasts.length;
@@ -131,20 +136,35 @@ function renderAlert(s) {
     prev.focus = null;
     silenced = false;
   }
-  document.body.classList.toggle("alarm", Boolean(critical.length) && !silenced);
+  $("#alert-silence").disabled = silenced;
   $("#alert-response").hidden = !critical.length;
   box.dataset.incident = "";
   if (!z) return;
 
-  $("#alert-kicker").textContent = stale ? "Last reported · stream disconnected" : "Live observation";
-  $("#alert-title").textContent = `${WORD[z.status]} at ${z.name}`;
-  $("#alert-text").textContent = `${densityReason(z, t)} · ${z.count.toLocaleString()} people in view`;
-  $("#alert-other").hidden = !others.length;
-  $("#alert-other").replaceChildren(...others.map((zone) =>
-    h("li", { "data-s": zone.status }, h("b", {}, `${WORD[zone.status]} at ${zone.name}`),
-      h("span", {}, densityReason(zone, t)))));
-  if (critical.length) renderResponse(L, z);
-  else $("#alert-age").textContent = "";
+  const inc = incidents.get(z.id);
+  box.dataset.attention = inc?.state === "open" || !inc ? "active" : "acknowledged";
+  $("#alert-kicker").textContent = (z.status === "critical" ? "Critical" : "Warning") +
+    (stale ? " · Last reported" : "") + (inc && z.status === "critical" ? " · " + incidentState(inc.state) : "");
+  $("#alert-age").textContent = observedAt(z, L);
+  $("#alert-open").setAttribute("aria-label", "Open " + z.name);
+  $("#alert-title").textContent = WORD[z.status] + " at " + z.name;
+  $("#alert-text").textContent = densityReason(z, t) + " · " + z.count.toLocaleString() + " people in view";
+  const otherList = $("#alert-other");
+  otherList.hidden = !others.length;
+  // Keep the interactive rows mounted when only the readings change.
+  const rows = others.map((zone) => {
+    let li = [...otherList.children].find((row) => row.dataset.zone === zone.id);
+    if (!li) li = h("li", { "data-zone": zone.id },
+      h("button", { class: "linkish", onclick: () => pick(zone.id) }), h("span"));
+    li.dataset.s = zone.status;
+    li.firstChild.textContent = WORD[zone.status] + " at " + zone.name + " · Open zone";
+    const state = zone.status === "critical" && incidents.get(zone.id)?.state;
+    li.lastChild.textContent = [state && incidentState(state), densityReason(zone, t), observedAt(zone, L)].filter(Boolean).join(" · ");
+    return li;
+  });
+  rows.forEach((row, i) => { if (otherList.children[i] !== row) otherList.insertBefore(row, otherList.children[i] || null); });
+  while (otherList.children.length > rows.length) otherList.lastChild.remove();
+  if (critical.length) renderResponse(L, z, inc, stale);
 }
 
 function announce(selector, message) {
@@ -156,20 +176,22 @@ function densityReason(z, t) {
   return `${z.density.toFixed(2)} people/m² · threshold ${t[z.status]}`;
 }
 
-function renderResponse(L, z) {
+function observedAt(z, L) {
+  return "Observed " + clock(z.last_measurement_at ?? z.last_seen ?? L.now);
+}
+
+function renderResponse(L, z, inc, stale) {
   const plan = (L.plans || []).find((p) => p.from === z.id);
-  const inc = (L.incidents || []).find((i) => i.zone === z.id && i.state !== "resolved");
   $("#alert").dataset.incident = inc?.id || "";
-  $("#alert-age").textContent = inc ? `${inc.id} · ${inc.state} · ${duration(L.now - inc.opened_at)}` : "";
-  const steps = z.tip ? [z.tip] : [];
-  if (plan) steps.push(`Send people to ${plan.to_name}, which is ${plan.to_load_pct}% full.`);
-  if ((z.flow?.counterflow || 0) >= 0.55) steps.push("Groups are pushing in opposite directions here. Stop the inbound stream first.");
+  const steps = !stale && z.tip ? [z.tip] : [];
+  if (!stale && plan) steps.push(`Send people to ${plan.to_name} at ${plan.to_load_pct}% of its crush-risk threshold.`);
+  if (!stale && z.flow?.counterflow_confirmed) steps.push("Groups are pushing in opposite directions here. Stop the inbound stream first.");
   const key = steps.join("|");
   if ($("#alert-steps").dataset.key !== key) {
     $("#alert-steps").dataset.key = key;
     $("#alert-steps").replaceChildren(...steps.map((t) => h("li", {}, h("span", {}, t))));
   }
   const ack = $("#alert-ack");
-  ack.disabled = !inc || inc.state !== "open";
-  ack.textContent = inc && inc.state !== "open" ? "Acknowledged" : "Acknowledge";
+  ack.hidden = !inc || inc.state !== "open";
+  ack.disabled = !inc || incidentBusy(inc);
 }
