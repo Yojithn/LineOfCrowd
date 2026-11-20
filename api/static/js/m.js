@@ -61,7 +61,9 @@ async function fire(zone, btn) {
   btn.disabled = true;
   const r = await api.post(`/api/chaos/kill/${zone.id}?by=phone`);
   if (r.status === 401) return location.assign(signInUrl());
-  if (r.ok) crashes[zone.id] = { at: Date.now(), down: false };
+  // remember which pod was crashed: a different pod reporting means Kubernetes replaced it
+  const before = live?.zones.find((z) => z.id === zone.id)?.pod;
+  if (r.ok) crashes[zone.id] = { at: Date.now(), down: false, pod: r.data?.pod || before || null };
   else {
     btn.querySelector("span").innerHTML = r.status === 429 ? `Wait<br>${r.data?.retry_after || 5} s` : "Failed";
     setTimeout(() => { btn.disabled = false; btn.querySelector("span").innerHTML = "Hold to<br>crash"; }, 3000);
@@ -124,7 +126,16 @@ function render() {
     r.sub.textContent = zz.offline ? "Down. Waiting for Kubernetes…" : zz.pod ? `Running on pod ${zz.pod.split("-").slice(-1)[0]}` : "Running";
     if (!c) { r.btn.disabled = zz.offline; continue; }
     if (zz.offline) c.down = true;
-    else if (c.down) {
+    // Recovered when the camera was seen down and is back, or when a new pod already reports.
+    // Kubernetes often replaces the pod faster than the API's offline threshold (4 s),
+    // so waiting only for "offline" left the button disabled forever.
+    const replaced = !zz.offline && zz.pod && c.pod && zz.pod !== c.pod;
+    if (!zz.offline && !replaced && !c.down) r.sub.textContent = "Crash sent. Waiting for Kubernetes…";
+    if (!zz.offline && Date.now() - c.at > 45000 && !c.down && !replaced) {
+      delete crashes[zz.id];   // never saw it go down (e.g. local mode): free the button
+      r.btn.disabled = false;
+      r.btn.querySelector("span").innerHTML = "Hold to<br>crash";
+    } else if (!zz.offline && (c.down || replaced)) {
       const secs = (Date.now() - c.at) / 1000;
       delete crashes[zz.id];
       if (!best || secs < best) { best = secs; try { localStorage.setItem("cs-best", String(secs)); } catch { /* ignore */ } }
