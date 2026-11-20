@@ -27,6 +27,7 @@ function pick(id) {
 function toggleLayer(k) {
   const layers = { ...store.get().layers, [k]: !store.get().layers[k] };
   store.set({ layers });
+  $("#pressure-key").hidden = !layers.pressure;
   $$("#layers button").forEach((b) => b.setAttribute("aria-pressed", String(layers[b.dataset.layer])));
 }
 

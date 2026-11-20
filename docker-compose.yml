@@ -47,6 +47,8 @@ services:
   worker-stage:
     <<: *worker
     hostname: worker-stage
+    volumes:
+      - ./worker/videos:/app/videos:ro
     environment: { <<: *worker-env, ZONE: stage, POD_NAME: worker-stage, VIDEO: /app/videos/stage.mp4 }
 
   worker-food:

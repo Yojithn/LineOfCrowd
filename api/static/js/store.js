@@ -6,7 +6,7 @@ const state = {
   history: null,        // /api/history (15 min replay)
   replayT: null,        // unix time being replayed, or null for live
   selected: null,       // zone id open in the drawer
-  layers: { pressure: true, heat: false, people: true, flow: true },
+  layers: { pressure: false, heat: false, people: false, flow: false },
   prefs: { voice: true, follow: true },
   started: false,
   conn: "connecting",   // connecting | live | lost

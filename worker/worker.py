@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import json
+import http.client
 import os
 import socket
 import sys
@@ -64,7 +65,10 @@ def http_json(method: str, path: str, body: dict | None = None, timeout: float =
     if path == "/api/report":
         req.add_unredirected_header("Authorization", f"Bearer {WORKER_KEY}")
     with _HTTP.open(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode() or "{}")
+        result = json.loads(resp.read().decode())
+        if not isinstance(result, dict):
+            raise ValueError("Expected a JSON object from the API")
+        return result
 
 
 def zone_settings() -> tuple[float, float]:
@@ -157,6 +161,7 @@ def main() -> None:
         log("ModelLoadError: checksum mismatch, the model file is corrupted. Exiting.")
         sys.exit(3)
 
+    started_at = time.time()
     area, critical = zone_settings()
     video = None if FORCE_SIM else find_video()
     detector = None
@@ -171,37 +176,56 @@ def main() -> None:
         log(f"No video for '{ZONE}', using the simulated feed (area {area} m²)")
 
     tracker = CentroidTracker()
-    counterflow = CounterflowPersistence(threshold_s=float(os.getenv("COUNTERFLOW_PERSISTENCE_S", "3")))
+    persistence_s = float(os.getenv("COUNTERFLOW_PERSISTENCE_S", "3"))
+    counterflow = CounterflowPersistence(threshold_s=persistence_s)
     status = "safe"
     interval = 1.0 / FPS
-    last = time.time()
+    last = time.monotonic()
+    cycle_failures = 0
     failures = 0
     while True:
-        started = time.time()
+        observed_at = time.time()
+        started = time.monotonic()
         dt = started - last
         last = started
-        if detector:
-            frame = cam.read()
-            boxes = detector.detect(frame)
-            infer_ms = detector.last_ms
-        else:
-            frame, boxes = cam.step(dt)
-            infer_ms = 0.0
-        h, w = frame.shape[:2]
-        tracks = tracker.update(boxes, w, h, dt)
-        flow = counterflow.update(flow_stats(tracks, min_speed=FLOW_MIN_SPEED, min_moving=FLOW_MIN_MOVING,
-                                             min_stream_fraction=FLOW_MIN_STREAM_FRACTION,
-                                             cone_degrees=FLOW_CONE_DEGREES), dt)
-        jpg = cv2.imencode(".jpg", draw(frame, tracks, status), [cv2.IMWRITE_JPEG_QUALITY, 70])[1]
-        payload = {
-            "zone": ZONE, "count": len(tracks), "raw_detection_count": len(boxes),
-            "pod": POD, "version": VERSION, "sim": detector is None,
-            "fps": round(1 / max(dt, 1e-3), 2), "infer_ms": round(infer_ms, 1), "flow": flow,
-            # Detections in letterbox padding can have a centre outside the image.
-            "points": [[round(t.x, 3), round(t.y, 3), round(t.vx, 3), round(t.vy, 3)]
-                       for t in tracks[:150] if 0 <= t.x <= 1 and 0 <= t.y <= 1],
-            "frame": base64.b64encode(jpg.tobytes()).decode(),
-        }
+        fault = "no_frames"
+        try:
+            if detector:
+                frame = cam.read()
+                fault = "processing_error"
+                boxes = detector.detect(frame)
+                infer_ms = detector.last_ms
+            else:
+                frame, boxes = cam.step(dt)
+                infer_ms = 0.0
+            fault = "processing_error"
+            h, w = frame.shape[:2]
+            tracks = tracker.update(boxes, w, h, dt)
+            flow = counterflow.update(flow_stats(tracks, min_speed=FLOW_MIN_SPEED, min_moving=FLOW_MIN_MOVING,
+                                                 min_stream_fraction=FLOW_MIN_STREAM_FRACTION,
+                                                 cone_degrees=FLOW_CONE_DEGREES), dt)
+            encoded, jpg = cv2.imencode(".jpg", draw(frame, tracks, status), [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if not encoded:
+                raise ValueError("JPEG encoding failed")
+            payload = {
+                "zone": ZONE, "count": len(tracks), "raw_detection_count": len(boxes),
+                "pod": POD, "version": VERSION, "sim": detector is None,
+                "fps": round(1 / max(dt, 1e-3), 2), "infer_ms": round(infer_ms, 1), "flow": flow,
+                # Detections in letterbox padding can have a centre outside the image.
+                "points": [[round(t.x, 3), round(t.y, 3), round(t.vx, 3), round(t.vy, 3)]
+                           for t in tracks[:150] if 0 <= t.x <= 1 and 0 <= t.y <= 1],
+                "frame": base64.b64encode(jpg.tobytes()).decode(),
+            }
+            beat()
+            cycle_failures = 0
+        except Exception as exc:
+            cycle_failures += 1
+            if cycle_failures == 1 or cycle_failures % 60 == 0:
+                log("Camera cycle failed", severity="WARNING", event=fault, error_type=type(exc).__name__)
+            tracker = CentroidTracker()
+            counterflow = CounterflowPersistence(threshold_s=persistence_s)
+            payload = {"zone": ZONE, "pod": POD, "version": VERSION, "fault": fault}
+        payload.update(started_at=started_at, observed_at=observed_at)
         try:
             resp = http_json("POST", "/api/report", payload)
             status = resp.get("status", status)
@@ -214,15 +238,16 @@ def main() -> None:
             if resp.get("surge") and not detector:
                 log("Surge drill started")
                 cam.surge()
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, http.client.HTTPException) as exc:
             failures += 1
             if failures in (1, 10) or failures % 60 == 0:
                 http_status = exc.code if isinstance(exc, urllib.error.HTTPError) else None
                 log("Camera report failed. Processing continues with the next frame.",
                     severity="WARNING", event="reporting_failure",
                     error_type=type(exc).__name__, http_status=http_status, failures=failures)
-        beat()
-        time.sleep(max(0.0, interval - (time.time() - started)))
+        errors = max(failures, cycle_failures)
+        delay = 0.25 * 2 ** min(3, errors) if errors else 0
+        time.sleep(max(delay, interval - (time.monotonic() - started), 0.0))
 
 
 if __name__ == "__main__":
