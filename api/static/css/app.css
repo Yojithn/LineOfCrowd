@@ -468,6 +468,8 @@ body.replaying .live-pill::before { background: var(--sandal-dim); }
 .toasts { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 95; display: grid; gap: 8px; justify-items: center; pointer-events: none; }
 .toast { background: var(--jasmine); color: var(--rosewood); font-weight: 600; font-size: var(--t-sm); padding: 8px 16px; border-radius: 999px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4); animation: rise 0.25s var(--ease); }
 .toast.bad { background: var(--crush); color: #fff; }
+.toast.has-link { pointer-events: auto; display: flex; align-items: center; gap: 12px; }
+.toast.has-link a { color: inherit; font-weight: 750; text-decoration: underline; text-underline-offset: 3px; }
 
 /* ---------- alarm ---------- */
 .sindoor { position: fixed; inset: 0 0 auto; height: 3px; pointer-events: none; z-index: 50; opacity: 0; background: var(--crush); }

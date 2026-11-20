@@ -72,6 +72,24 @@ def test_operator_bearer_and_browser_session(client):
     assert client.delete("/api/settings").status_code == 401
 
 
+@pytest.mark.parametrize("page", ["/", "/m"])
+def test_browser_sign_in_returns_to_the_page_it_came_from(client, page):
+    r = client.get(f"/api/operator?next={page}", auth=("operator", "test-operator-key"), follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == page
+    assert security.COOKIE in r.headers["set-cookie"]
+    assert client.delete("/api/settings", headers={"Origin": "http://testserver"}).status_code == 200
+
+
+@pytest.mark.parametrize("target", ["https://evil.example", "//evil.example", "/api/settings"])
+def test_sign_in_never_redirects_off_the_dashboard(client, target):
+    r = client.get("/api/operator", params={"next": target}, auth=("operator", "test-operator-key"),
+                   follow_redirects=False)
+    assert r.status_code == 200
+    assert "location" not in r.headers
+    assert client.get(f"/api/operator?next={target}", follow_redirects=False).status_code == 401
+
+
 def test_production_session_is_secure_and_configuration_fails_closed(monkeypatch):
     monkeypatch.setattr(security, "DEVELOPMENT", False)
     with TestClient(main.app, base_url="https://testserver") as client:

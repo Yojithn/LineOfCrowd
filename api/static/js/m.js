@@ -1,5 +1,5 @@
 // Volunteer phone page: your zone's status in one glance, and a hold-to-crash chaos test.
-import { api, connect } from "./api.js";
+import { api, connect, signInUrl } from "./api.js";
 import { $, $$, h, WORD } from "./util.js";
 
 let cfg = null;
@@ -60,6 +60,7 @@ function holdButton(zone) {
 async function fire(zone, btn) {
   btn.disabled = true;
   const r = await api.post(`/api/chaos/kill/${zone.id}?by=phone`);
+  if (r.status === 401) return location.assign(signInUrl());
   if (r.ok) crashes[zone.id] = { at: Date.now(), down: false };
   else {
     btn.querySelector("span").innerHTML = r.status === 429 ? `Wait<br>${r.data?.retry_after || 5} s` : "Failed";
@@ -82,6 +83,7 @@ $("#respond").addEventListener("click", async () => {
   if (!inc) return;
   const zn = cfg.zones.find((z) => z.id === mine)?.name || "this zone";
   const r = await api.post(`/api/incidents/${inc.id}/respond`, { by: `a volunteer at ${zn}` });
+  if (r.status === 401) return location.assign(signInUrl());
   responded = r.ok ? inc.id : null;
   $("#respond-note").hidden = false;
   $("#respond-note").textContent = r.ok ? "The control room can see you're on your way." : r.message;

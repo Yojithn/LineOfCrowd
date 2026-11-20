@@ -121,10 +121,11 @@ Run `python scripts\cs.py down` first if the cluster is using port 8080.
 
 ### Operator sign-in and API configuration
 
-Open `/api/operator` in a browser tab on the **same origin** as the dashboard or phone page
-(for example, http://localhost:8080/api/operator). In the browser prompt, use `operator` as the
-username and the value of `OPERATOR_API_KEY` as the password. Return to the dashboard or phone page
-after the confirmation. Each browser needs its own sign-in for settings changes, incident actions,
+Open `/api/operator?next=/` in a browser tab on the **same origin** as the dashboard (for example,
+http://localhost:8080/api/operator?next=/), or `/api/operator?next=/m` for the phone page. In the
+browser prompt, use `operator` as the username and the value of `OPERATOR_API_KEY` as the password.
+The browser then goes straight back to the dashboard or phone page. If you forget, any operator
+action shows a **Sign in** link (on the phone page it opens the sign-in prompt by itself). Each browser needs its own sign-in for settings changes, incident actions,
 or enabled drills. The browser session expires after eight hours. Public monitoring, including
 camera frames, replay, and the live stream, remains accessible without a sign-in.
 

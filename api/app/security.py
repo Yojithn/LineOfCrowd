@@ -6,6 +6,7 @@ import os
 import time
 
 from fastapi import HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
 
 APP_ENV = os.getenv("APP_ENV", "production")
 DEVELOPMENT = APP_ENV == "development"
@@ -57,7 +58,12 @@ def _valid_session(request: Request) -> bool:
             and int(expires) > time.time() and matches(signature, _session_signature(expires)))
 
 
-def operator_sign_in(request: Request, response: Response) -> dict:
+# Pages a browser may be sent back to after signing in. A fixed list, so the link
+# cannot be abused to redirect someone to another site.
+SIGN_IN_RETURN_PAGES = {"/", "/m"}
+
+
+def operator_sign_in(request: Request, response: Response, next: str | None = None):
     try:
         raw = base64.b64decode(credentials(request, "Basic"), validate=True).decode("ascii")
     except ValueError:
@@ -65,11 +71,16 @@ def operator_sign_in(request: Request, response: Response) -> dict:
     user, _, password = raw.partition(":")
     if user != "operator" or not matches(password, OPERATOR_KEY):
         raise _operator_challenge()
+    if next in SIGN_IN_RETURN_PAGES:
+        # browser sign-in from the dashboard or phone page: go straight back to it
+        response = RedirectResponse(next, status_code=303)
     expires = str(int(time.time()) + SESSION_SECONDS)
     response.set_cookie(COOKIE, f"{expires}.{_session_signature(expires)}", max_age=SESSION_SECONDS,
                         path="/api", httponly=True, secure=not DEVELOPMENT or request.url.scheme == "https",
                         samesite="strict")
     response.headers["Cache-Control"] = "no-store"
+    if isinstance(response, RedirectResponse):
+        return response
     return {"message": "Signed in. Return to the control room or phone page to use operator actions."}
 
 

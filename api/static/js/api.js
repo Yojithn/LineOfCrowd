@@ -10,12 +10,19 @@ async function call(method, url, body) {
     });
     let data = null;
     try { data = await r.json(); } catch { /* empty body */ }
+    // operator action from a browser that has not signed in yet; toasts add a sign-in link
+    if (r.status === 401) return { ok: false, status: 401, data, message: SIGN_IN_MESSAGE };
     const message = data?.message || data?.detail?.[0]?.msg || data?.detail || `Request failed (${r.status})`;
     return { ok: r.ok, status: r.status, data, message: typeof message === "string" ? message : "Request failed" };
   } catch {
     return { ok: false, status: 0, data: null, message: "The control server is not reachable." };
   }
 }
+
+export const SIGN_IN_MESSAGE = "Operator sign-in needed for this action.";
+
+/** Sign-in link that brings this browser back to the current page afterwards. */
+export const signInUrl = () => `/api/operator?next=${location.pathname.startsWith("/m") ? "/m" : "/"}`;
 
 export const api = {
   get: (u) => call("GET", u),
