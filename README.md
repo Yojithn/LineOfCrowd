@@ -175,6 +175,12 @@ cluster lives here. Set the laptop up as a "self-hosted runner":
 3. Run the commands GitHub shows in PowerShell, in a folder **outside** the project, like `C:\actions-runner`.
    When it asks *"Would you like to run the runner as service?"* answer **N**.
 4. Start it with `.\run.cmd` and keep that window open during the expo.
+5. On GitHub: **Settings → Secrets and variables → Actions**.
+   - Under **Secrets**, add `PIPELINE_TOKEN` with the same value as on the laptop.
+   - Under **Variables**, add `DEPLOY_ENABLED` = `true`.
+
+   Until `DEPLOY_ENABLED` is set, pushes still run the tests and the image build and scan,
+   and the deploy job is skipped instead of waiting forever for a runner.
 
 Now:
 

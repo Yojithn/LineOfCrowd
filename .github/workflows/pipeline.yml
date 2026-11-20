@@ -15,11 +15,6 @@ on:
         type: boolean
         default: false
 
-# Only one release at a time touches the cluster.
-concurrency:
-  group: crowdsentinel-release
-  cancel-in-progress: false
-
 jobs:
   test:
     name: Unit tests
@@ -58,8 +53,14 @@ jobs:
   deploy:
     name: Release to the Kubernetes cluster
     needs: test
-    if: github.event_name != 'pull_request'
+    # Runs only once the self-hosted runner is registered and the repository variable
+    # DEPLOY_ENABLED is set to true. Without it, the job would wait forever for a runner.
+    if: github.event_name != 'pull_request' && vars.DEPLOY_ENABLED == 'true'
     runs-on: self-hosted   # the laptop running the kind cluster (see README, "Connect GitHub Actions")
+    # Only one release at a time touches the cluster. Tests and image scans never wait for it.
+    concurrency:
+      group: crowdsentinel-release
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - name: Rolling update with automatic rollback
