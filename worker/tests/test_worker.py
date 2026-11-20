@@ -49,3 +49,17 @@ def test_worker_continues_after_camera_and_network_failures(monkeypatch, tmp_pat
     assert attempts[1]["count"] == 0 and attempts[1]["frame"]
     assert attempts[0]["started_at"] == attempts[1]["started_at"]
     assert delays[0] >= 0.5 and worker.HEARTBEAT.exists()
+
+
+@pytest.mark.parametrize("calm_phase", [0.0, 1.6, 3.1, 4.7])
+def test_surge_drill_reaches_crush_risk_within_about_ten_seconds(calm_phase):
+    import sim
+
+    area, critical = 18.0, 4.0
+    cam = sim.SimCamera("gate", area, critical, seed=1)
+    cam.phase = calm_phase          # calm level wanders between 0.5 and 1.9 people/m²
+    start = cam.t0
+    cam.surge_start = start
+    assert cam.target_count(start) / area < 2.0                    # still calm when triggered
+    assert cam.target_count(start + 10.5) / area >= critical       # red within ~10 s
+    assert cam.target_count(start + sim.SURGE_RISE_S + 20) / area >= critical   # holds long enough to demo

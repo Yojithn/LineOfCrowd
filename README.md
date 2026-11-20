@@ -72,7 +72,7 @@ best. Keep each under about 30 MB so GitHub accepts them, and commit them to the
 Any camera without a video runs a **simulated feed**, so the demo works even with zero videos.
 
 **Tip:** leave Main gate without a video. Its simulated feed surges to crush risk every 2.5 minutes
-and on demand (key **1**), which guarantees the red-alert moment during the demo. Use real clips
+and on demand (**Shift 1**, or **Ctrl K** → "Surge drill at Main gate"), which guarantees the red-alert moment during the demo. Use real clips
 for the other three zones.
 
 Counts look too low or high? Change `area_m2` for that zone in `api\app\zones.json`
@@ -192,7 +192,7 @@ Now:
 2. **It watches the crowd.** Point at the camera feeds with boxes around people, the 3D map with
    one pressure column per zone, and the 30-minute forecast.
 3. **Crush risk.** Press **Shift 1** to start a surge drill at Main gate (simulated camera), or wait,
-   because it surges on its own every 2.5 minutes. About 30 seconds later the zone turns red, the alarm
+   because it surges on its own every 2.5 minutes. About 10 seconds later (orange after ~3 s) the zone turns red, the alarm
    and voice go off, the map flies there, the redirect arc shows where to send people, an incident
    opens, and volunteers' phones vibrate. Click **Acknowledge**, and have a judge tap
    **I'm on my way** on the phone page: it appears in the incident's timeline.

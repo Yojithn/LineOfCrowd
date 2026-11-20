@@ -7,11 +7,15 @@ camera. A surge can be triggered to rehearse the red-alert moment.
 from __future__ import annotations
 
 import math
+import os
 import random
 import time
 
 import cv2
 import numpy as np
+
+# Seconds a surge drill takes to climb from calm to peak (peak is just above crush risk).
+SURGE_RISE_S = max(1.0, float(os.getenv("SIM_SURGE_RISE_S", "12")))
 
 W, H = 640, 360
 HORIZON = 0.18  # top of the walkable ground, as a fraction of frame height
@@ -45,7 +49,9 @@ class SimCamera:
         if self.surge_start is None:
             return 0.0
         t = now - self.surge_start
-        rise, hold, fall = 35.0, 25.0, 30.0
+        # Fast rise so a drill reaches crush risk in about 10 s (live demo), long hold so the
+        # alarm, voice and redirect plan have time to play out, gentle fall back to calm.
+        rise, hold, fall = SURGE_RISE_S, 25.0, 20.0
         if t < rise:
             return t / rise
         if t < rise + hold:
