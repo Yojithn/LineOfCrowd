@@ -4,6 +4,7 @@
   python scripts/cs.py up                     create the cluster, build, load and start everything
   python scripts/cs.py deploy --version v2    release a new version with a rolling update
   python scripts/cs.py deploy --version v3 --broken   release a broken model to show auto-rollback
+  python scripts/cs.py phone                  point the QR code at this laptop's current Wi-Fi address
   python scripts/cs.py status                 list pods
   python scripts/cs.py logs gate              show one camera's logs
   python scripts/cs.py down                   delete the cluster
@@ -227,6 +228,20 @@ def cmd_deploy(args) -> int:
     return 1
 
 
+def cmd_phone(args) -> int:
+    """Point the QR code and phone links at the laptop's current Wi-Fi address.
+    Run this after joining a different Wi-Fi or hotspot (the address changes)."""
+    public = args.public_url or f"http://{lan_ip()}:8080"
+    say(f"Phones will use {public}")
+    kubectl("set", "env", "deploy/api", f"PUBLIC_URL={public}")
+    kubectl("rollout", "status", "deploy/api", "--timeout=120s")
+    print(f"  Phone page:        {public}/m   (or press Q on the dashboard for the QR code)")
+    print(f"  Operator sign-in:  {public}/api/operator?next=/m")
+    if sys.platform == "win32":
+        print("  If phones cannot open it, see README section 8, Troubleshooting: \"Phones can't open the page\".")
+    return 0
+
+
 def cmd_status(_args) -> int:
     kubectl("get", "deploy,pods", "-o", "wide")
     return 0
@@ -255,12 +270,14 @@ def main() -> int:
     d.add_argument("--run-id", help="id shown on the dashboard, e.g. the GitHub run id")
     d.add_argument("--tests-passed", action="store_true", help="mark the test stage as passed (set by CI)")
     d.add_argument("--timeout", type=int, default=60)
+    ph = sub.add_parser("phone")
+    ph.add_argument("--public-url", help="Address phones should use, e.g. http://192.168.137.1:8080")
     sub.add_parser("status")
     lg = sub.add_parser("logs")
     lg.add_argument("zone", choices=["gate", "stage", "food", "exit"])
     sub.add_parser("down")
     args = p.parse_args()
-    return {"doctor": cmd_doctor, "up": cmd_up, "deploy": cmd_deploy, "status": cmd_status,
+    return {"doctor": cmd_doctor, "up": cmd_up, "deploy": cmd_deploy, "phone": cmd_phone, "status": cmd_status,
             "logs": cmd_logs, "down": cmd_down}[args.cmd](args)
 
 

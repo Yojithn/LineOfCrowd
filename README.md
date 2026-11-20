@@ -106,6 +106,8 @@ quick. When it finishes it prints two addresses:
   and click **Start monitoring**. The click is needed because browsers block sound until you click.
 - **Phones:** `http://<laptop-ip>:8080/m`. Phones and laptop must be on the **same Wi-Fi or hotspot**.
   Press **Q** on the dashboard (or the **Phones** button) to show a big QR code for this address.
+  The laptop's address changes whenever it joins a different Wi-Fi or hotspot. After switching,
+  run `python scripts\cs.py phone` so the QR code points at the new address.
 
 Other commands:
 
@@ -265,8 +267,9 @@ menu, **Q** QR code, **L** live, **R** reset map, **M** voice on or off, **?** a
 | `doctor` says Docker isn't running | Open Docker Desktop and wait for **Engine running** |
 | Port 8080 already in use | `docker compose down`, or close whatever uses 8080 |
 | Pods stuck in `ImagePullBackOff` | Images weren't loaded. Run `python scripts\cs.py up` again |
-| Phones can't open the page | Same hotspot for both. In admin PowerShell: `New-NetFirewallRule -DisplayName CrowdSentinel -Direction Inbound -Protocol TCP -LocalPort 8080 -Action Allow`. Set the Wi-Fi network to **Private** |
-| QR code says phones can't open localhost | Re-run `python scripts\cs.py up` while connected to the hotspot, or `up --public-url http://<ip>:8080` |
+| Phones can't open the page | 1) Run `python scripts\cs.py phone` (the laptop's address may have changed) and rescan the QR code. 2) Same Wi-Fi or hotspot for phone and laptop; turn off VPN apps on the phone. 3) Test with a phone that is **joined to** the hotspot, not the phone **sharing** it: the sharing phone often cannot open pages on its own clients. 4) Chrome on iPhone: Settings → Chrome → turn on **Local Network**. 5) In admin PowerShell: `New-NetFirewallRule -DisplayName CrowdSentinel -Direction Inbound -Protocol TCP -LocalPort 8080 -Action Allow` |
+| Most reliable demo network | Turn on the laptop's own hotspot (Settings → Network → **Mobile hotspot**), join the phones to it, then run `python scripts\cs.py phone`. Phones then reach the laptop at `192.168.137.1` with no router in between |
+| QR code says phones can't open localhost | Run `python scripts\cs.py phone` while connected to the hotspot, or `phone --public-url http://<ip>:8080` |
 | 3D map is blank | Use Chrome or Edge with hardware acceleration on (Settings → System) |
 | No voice | Click **Start monitoring** first (browsers block sound until a click), then press **M** to toggle voice |
 | GitHub deploy job waits forever | The runner window (`run.cmd`) is closed. Start it again |
