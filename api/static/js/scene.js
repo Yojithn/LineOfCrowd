@@ -1,7 +1,7 @@
 // The 3D venue: Mysuru Palace outlined in Dasara bulbs, zones, crowd pressure, heat, people and flow.
 /* global deck */
 import { store, zonesView } from "./store.js";
-import { COL, ZARI, JASMINE, clamp } from "./util.js";
+import { COL, ZARI, JASMINE, WORD, clamp, reducedMotion } from "./util.js";
 
 const M_LAT = 111320;
 let LNG0 = 0, LAT0 = 0, M_LNG = 1;
@@ -78,7 +78,7 @@ function fit(cfg) {
 }
 
 function fly(view, ms = 1600) {
-  deckgl?.setProps({ initialViewState: { ...view, transitionDuration: ms, transitionInterpolator: new deck.FlyToInterpolator() } });
+  deckgl?.setProps({ initialViewState: { ...view, transitionDuration: reducedMotion() ? 0 : ms, transitionInterpolator: new deck.FlyToInterpolator() } });
 }
 export function resetView() { fly(fit(store.get().cfg), 1200); }
 export function flyToZone(id) {
@@ -103,7 +103,7 @@ function layers(now) {
   const byId = Object.fromEntries(zones.map((z) => [z.id, z]));
   const zd = G.zones.map((g) => ({ ...g, s: byId[g.id] }));
   const L = s.layers;
-  const pulse = 0.5 + 0.5 * Math.sin(now / 170);
+  const pulse = reducedMotion() ? 1 : 0.5 + 0.5 * Math.sin(now / 170);
   const booting = bootAt && now - bootAt < 3400;
   const bulbKey = booting ? Math.round((now - bootAt) / 50) : bootAt ? "on" : "off";
   const dt = Math.min((performance.now() - lastStateAt) / 1000, 1.2);
@@ -165,7 +165,7 @@ function layers(now) {
       getLineWidth: (d) => (d.id === s.selected ? 3.5 : d.id === hoverZone ? 2.5 : 1.7),
       getFillColor: (d) => [...COL[statusOf(d)], statusOf(d) === "critical" ? 65 + 65 * pulse : d.id === s.selected ? 76 : d.id === hoverZone ? 68 : 48],
       getLineColor: (d) => (d.id === s.selected ? [...JASMINE, 255] : d.landmark ? [...ZARI, 240] : [...ZARI, 190]),
-      updateTriggers: { getFillColor: [tick, s.replayT, Math.round(pulse * 10), hoverZone], getLineColor: [tick, s.replayT, s.selected], getLineWidth: [s.selected, hoverZone] },
+      updateTriggers: { getFillColor: [tick, s.replayT, Math.round(pulse * 10), s.selected, hoverZone], getLineColor: [tick, s.replayT, s.selected], getLineWidth: [s.selected, hoverZone] },
     }),
     new deck.PolygonLayer({
       id: "palace", data: G.palace, getPolygon: (d) => d.polygon, extruded: true, wireframe: true,
@@ -212,7 +212,7 @@ function layers(now) {
     }),
     new deck.TextLayer({
       id: "labels", data: zd, getPosition: (d) => [d.center[0], d.center[1], (L.pressure ? elev(d) : 4) + 12],
-      getText: (d) => `${d.landmark ? `${d.landmark} - ` : ""}${d.name}\n${live(d) ? `${d.s.density.toFixed(1)} people/m2 - ${d.s.status === "safe" ? "Calm" : d.s.status === "warning" ? "Crowded" : d.s.status === "critical" ? "Crush risk" : "No signal"}` : "No signal"}`,
+      getText: (d) => statusOf(d) === "safe" ? d.name : d.name + "\n" + WORD[statusOf(d)],
       characterSet: "auto", fontFamily: "Anek, sans-serif", fontWeight: 650, getSize: 15, lineHeight: 1.12,
       getColor: [243, 234, 219, 255], background: true, getBackgroundColor: [36, 19, 15, 238], backgroundPadding: [9, 6],
       getTextAnchor: "middle", getAlignmentBaseline: "bottom",

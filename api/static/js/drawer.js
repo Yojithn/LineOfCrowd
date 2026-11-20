@@ -6,31 +6,30 @@ import { $, h, WORD, TREND, clock, clamp, duration, forecastEta, tween } from ".
 import { toast } from "./toast.js";
 import { flyToZone } from "./scene.js";
 
+import { cameraFrame } from "./cameras.js";
+
 const box = () => $("#drawer");
 let openId = null;
 let series = [];          // [[t, density|null], ...] for the chart
 let returnFocus = null;
 let hoverX = null;
-let frameAt = 0;
-let frameId = null;
-const FRAME_STALE_MS = 4000;
 const el = {};
 
 export const drawerOpen = () => openId;
 
 export function openDrawer(id) {
   const cfgZone = store.get().cfg.zones.find((z) => z.id === id);
-  if (!cfgZone) return;
+  if (!cfgZone || openId === id) return;
   if (openId !== id) returnFocus = returnFocus || document.activeElement;
   openId = id;
-  frameAt = 0;
-  frameId = null;
+  hoverX = null;
   series = [];
   store.set({ selected: id });
   build(cfgZone);
   box().classList.add("open");
   box().setAttribute("aria-hidden", "false");
   el.close.focus({ preventScroll: true });
+  if (matchMedia("(max-width: 1100px)").matches) $("#cams").scrollIntoView({ block: "nearest" });
   loadHistory(id);
   render(store.get());
 }
@@ -41,7 +40,7 @@ export function closeDrawer() {
   store.set({ selected: null });
   box().classList.remove("open");
   box().setAttribute("aria-hidden", "true");
-  returnFocus?.focus?.({ preventScroll: true });
+  returnFocus?.focus?.();
   returnFocus = null;
   return true;
 }
@@ -64,6 +63,8 @@ function build(zc) {
   el.feedType = h("span", { class: "feed-type" }, "Feed type pending");
   el.feedHealth = h("span", { class: "feed-health" }, "Connecting");
   el.pod = h("span", { class: "feed-pod" }, "Camera / pod pending");
+  el.observed = h("p", { class: "observed-zone" });
+  el.counter = h("p");
   el.people = h("b", {}, "0");
   el.dens = h("b", {}, "0.0");
   el.load = h("b", {}, "0%");
@@ -88,26 +89,22 @@ function build(zc) {
   chart.addEventListener("pointerleave", () => { hoverX = null; drawChart(); });
 
   d.append(
-    h("header", {}, h("div", {}, h("span", { class: "eyebrow" }, "Zone inspection"), h("h2", {}, zc.name), el.st), el.close),
+    h("header", {}, h("div", {}, h("span", { class: "eyebrow" }, "Live zone inspection"), h("h2", {}, zc.name), el.st), el.close),
     h("div", { class: "body" },
       h("section", { class: "overview", "aria-label": "Zone overview" },
         h("div", { class: "stats" },
           h("div", {}, el.people, h("span", { class: "label" }, "People in view")),
           h("div", { class: "density-stat" }, el.dens, h("span", { class: "label" }, "People / m²")),
           h("div", {}, el.load, h("span", { class: "label" }, "Of crush-risk threshold")))),
-      h("section", { class: "inspect-section", "aria-label": "Camera feed" },
-        h("div", { class: "section-head" }, h("h3", {}, "Camera feed"), el.feedHealth),
+      el.feedHealth, el.observed, el.inc,
+      h("details", { class: "inspect-section" }, h("summary", {}, "Density history · 15 min"),
+        chart, h("div", { class: "chart-axis" }, h("span", {}, "15 min ago"), h("span", {}, "Observed · people / m²"), h("span", {}, "Now"))),
+      h("details", { class: "inspect-section" }, h("summary", {}, "Movement and counterflow"),
+        h("div", { class: "duo" }, h("div", { class: "compass" }, el.rose), h("div", {}, el.move, el.flow, el.counter))),
+      h("details", { class: "inspect-section forecast" }, h("summary", {}, "Forecast"), el.fc),
+      h("details", { class: "inspect-section" }, h("summary", {}, "Camera details"),
         h("div", { class: "feed" }, el.feed, el.feedState, el.feedType), el.pod, el.ver),
-      h("section", { class: "inspect-section", "aria-label": "Density history" },
-        h("div", { class: "section-head" }, h("h3", {}, "Density history"), h("span", { class: "label" }, "Last 15 minutes · observed")),
-        chart, h("div", { class: "chart-axis" }, h("span", {}, "15 min ago"), h("span", {}, "Density · people / m²"), h("span", {}, "Now"))),
-      h("section", { class: "inspect-section", "aria-label": "Movement analysis" },
-        h("h3", {}, "Movement analysis"), h("div", { class: "duo" }, h("div", { class: "compass" }, el.rose), h("div", {}, el.move, el.flow))),
-      h("section", { class: "inspect-section forecast", "aria-label": "Forecast and status" },
-        h("h3", {}, "Forecast and status"), el.fc),
-      el.inc,
-      h("section", { class: "inspect-section operations", "aria-label": "Operational controls" },
-        h("h3", {}, "Operational controls"),
+      h("details", { class: "inspect-section operations" }, h("summary", {}, "Operational controls"),
         h("div", { class: "actions" }, h("button", { class: "btn go", onclick: () => flyToZone(zc.id) }, "Show on map"), el.surge, el.crash),
         el.confirm, el.actionStatus)));
 
@@ -151,23 +148,19 @@ async function act(inc, action, label) {
 
 document.addEventListener("frame", (e) => {
   if (e.detail.id !== openId || !el.feed) return;
-  frameAt = e.detail.at || Date.now();
-  frameId = e.detail.id;
-  el.feed.src = e.detail.url;
   updateFeed(store.get());
 });
 
 function updateFeed(s) {
-  if (!openId || !el.feed) return;
-  const z = s.live?.zones.find((q) => q.id === openId);
-  const offline = z?.offline || s.conn === "lost";
-  const fresh = !offline && frameId === openId && Date.now() - frameAt < FRAME_STALE_MS;
-  el.feed.hidden = !fresh;
-  el.feedState.hidden = fresh;
-  el.feedState.textContent = z?.offline ? "Camera offline · waiting for recovery"
-    : s.conn === "lost" ? "Live stream disconnected"
-    : frameAt ? "Camera frame stale · waiting for a new frame" : "Waiting for camera frame";
-  el.feedHealth.textContent = z?.offline ? "Offline" : s.conn === "lost" ? "Disconnected" : fresh ? "Receiving frames" : "No recent frame";
+  if (!openId) return;
+  const z = s.live?.zones.find((zone) => zone.id === openId);
+  if (!z) return;
+  const frame = cameraFrame(z, s.conn);
+  if (frame.url && el.feed.src !== frame.url) el.feed.src = frame.url;
+  el.feed.hidden = !frame.available;
+  el.feedState.hidden = frame.available;
+  el.feedState.textContent = frame.label;
+  el.feedHealth.textContent = "Camera · " + frame.label;
 }
 setInterval(() => updateFeed(store.get()), 1000);
 
@@ -265,7 +258,9 @@ function render(s) {
   el.st.textContent = s.conn === "lost" ? "Stream disconnected" : WORD[st];
   if (st === "offline") { el.people.textContent = "--"; el.people._v = undefined; el.dens.textContent = "--"; el.dens._v = undefined; el.load.textContent = "--"; }
   else { tween(el.people, z.count, 0); tween(el.dens, z.density, 1); el.load.textContent = `${z.load_pct}%`; }
-  el.feedType.textContent = z.sim ? "SIMULATED FEED" : "REAL FEED";
+  el.observed.hidden = z.offline || !["warning", "critical"].includes(z.status);
+  el.observed.textContent = (s.conn === "lost" ? "Last observed" : "Observed") + " · " + WORD[z.status] + " at " + z.density.toFixed(1) + " people/m²";
+  el.feedType.textContent = z.worker_health === "unseen" ? "Awaiting camera" : z.sim ? "Simulated feed" : "Camera feed";
   el.pod.textContent = `Camera / pod: ${z.pod || "Unavailable"}`;
   el.ver.textContent = z.version ? `Camera software ${z.version} · detection ${Math.round(z.infer_ms)} ms` : "";
   updateFeed(s);
@@ -274,6 +269,8 @@ function render(s) {
   series = series.filter((p) => p[0] >= s.live.now - 15 * 60);
   drawChart();
   drawRose(z);
+  el.counter.textContent = z.offline ? "Counterflow unavailable." : z.flow?.counterflow_confirmed
+    ? "Confirmed counterflow." : "No confirmed counterflow.";
   const f = z.forecast || {};
   const eta = forecastEta(z);
   el.fc.textContent = z.offline ? "Forecast unavailable while the camera is offline." : s.conn === "lost" ? "Forecast unavailable while the stream is disconnected."
@@ -283,6 +280,7 @@ function render(s) {
   el.surge.hidden = !z.sim;
 
   const inc = (s.live.incidents || []).find((i) => i.zone === openId && i.state !== "resolved");
+  el.inc.hidden = !inc;
   if (!inc) { el.inc.innerHTML = ""; delete el.inc.dataset.key; return; }
   const key = `${inc.id}:${inc.state}:${inc.timeline.length}`;
   if (el.inc.dataset.key === key) return;

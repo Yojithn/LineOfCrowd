@@ -77,10 +77,10 @@
       <div class="replay-banner" id="replay-banner"><span id="replay-label">Replay</span><button id="to-live">Back to live</button></div>
       <div class="map-tools">
         <div class="seg" role="group" aria-label="Map layers" id="layers">
-          <button data-layer="pressure" aria-pressed="true">Pressure</button>
+          <button data-layer="pressure" aria-pressed="false">Pressure</button>
           <button data-layer="heat" aria-pressed="false">Heat</button>
-          <button data-layer="people" aria-pressed="true">People</button>
-          <button data-layer="flow" aria-pressed="true">Flow</button>
+          <button data-layer="people" aria-pressed="false">People</button>
+          <button data-layer="flow" aria-pressed="false">Flow</button>
         </div>
         <div class="seg" role="group" aria-label="Map view">
           <button id="follow" aria-pressed="true" title="Fly to any zone that turns red">Follow alerts</button>
@@ -89,7 +89,7 @@
       </div>
       <div class="legend" aria-label="Legend">
         <span data-s="safe"><i></i>Calm</span><span data-s="warning"><i></i>Crowded</span><span data-s="critical"><i></i>Crush risk</span>
-        <span>Column height = people per m²</span>
+        <span id="pressure-key" hidden>Column height = people per m²</span>
       </div>
       <div class="replay" aria-label="Replay the last 15 minutes">
         <button class="live-pill" id="live-pill" title="Back to live">Live</button>
@@ -103,6 +103,7 @@
     </main>
 
     <section class="cams" id="cams" aria-label="Camera feeds">
+      <div class="camera-grid" id="camera-grid"></div>
       <aside class="drawer" id="drawer" aria-label="Zone details" aria-hidden="true" tabindex="-1"></aside>
     </section>
 
@@ -111,25 +112,30 @@
         <header><h2>Incidents</h2><span class="label" id="inc-count">none open</span></header>
         <div class="scroll" id="incidents"></div>
       </div>
-      <div class="panel">
-        <header><h2>Cluster</h2><span class="label" id="pod-count"></span></header>
-        <div class="scroll"><div class="hive" id="hive"></div></div>
-      </div>
-      <div class="panel">
-        <header><h2>Release pipeline</h2><span class="label" id="pipe-ver">no release yet</span></header>
-        <div class="rail" id="rail"></div>
-        <div class="verdict-line" id="pipe-line"></div>
-        <header>
-          <span class="label">Activity</span>
-          <div class="filters" id="filters" role="group" aria-label="Filter activity">
-            <button data-f="all" aria-pressed="true">All</button>
-            <button data-f="alerts" aria-pressed="false">Alerts</button>
-            <button data-f="chaos" aria-pressed="false">Chaos</button>
-            <button data-f="release" aria-pressed="false">Releases</button>
+      <details class="diagnostics">
+        <summary>Diagnostics</summary>
+        <div class="diagnostic-panels">
+          <div class="panel">
+            <header><h2>Cluster</h2><span class="label" id="pod-count"></span></header>
+            <div class="scroll"><div class="hive" id="hive"></div></div>
           </div>
-        </header>
-        <div class="scroll"><ul class="log" id="log" aria-live="polite"></ul></div>
-      </div>
+          <div class="panel">
+            <header><h2>Release pipeline</h2><span class="label" id="pipe-ver">no release yet</span></header>
+            <div class="rail" id="rail"></div>
+            <div class="verdict-line" id="pipe-line"></div>
+            <header>
+              <span class="label">Activity</span>
+              <div class="filters" id="filters" role="group" aria-label="Filter activity">
+                <button data-f="all" aria-pressed="true">All</button>
+                <button data-f="alerts" aria-pressed="false">Alerts</button>
+                <button data-f="chaos" aria-pressed="false">Chaos</button>
+                <button data-f="release" aria-pressed="false">Releases</button>
+              </div>
+            </header>
+            <div class="scroll"><ul class="log" id="log" aria-live="polite"></ul></div>
+          </div>
+        </div>
+      </details>
     </section>
   </div>
 
@@ -182,17 +188,10 @@
   <div class="toasts" id="toasts" aria-live="polite"></div>
 
   <template id="tpl-cam">
-    <button class="cam" data-s="safe">
-      <img alt="">
-      <div class="static"><canvas width="160" height="90"></canvas></div>
-      <div class="ring"></div>
-      <div class="hud">
-        <div><div><div class="nm"></div><div class="rec">Live</div></div><span class="chip">Calm</span></div>
-        <div><div><div class="n big">0<small>people</small></div><div class="sub"></div></div><div class="ver"></div></div>
-      </div>
-      <div class="lost"><div><b>No signal</b><span><span class="who">Kubernetes</span> is restarting this camera <span class="off-t">0.0 s</span></span></div></div>
-      <div class="healed"></div>
-      <span class="hint">Open zone</span>
+    <button class="cam" aria-controls="drawer" aria-pressed="false">
+      <img alt="" hidden>
+      <span class="camera-caption"><strong class="nm"></strong><span class="camera-state">Connecting</span></span>
+      <span class="healed"></span>
     </button>
   </template>
 
