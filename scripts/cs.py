@@ -160,6 +160,7 @@ def cmd_up(args) -> int:
     say("CrowdSentinel is running")
     print(f"  Dashboard on this laptop:  {API_URL}")
     print(f"  Phones on the same Wi-Fi:  {public}/m")
+    print(f"  Operator sign-in:          {API_URL}/api/operator?next=/   (user: operator, password: OPERATOR_API_KEY)")
     return 0
 
 
@@ -180,6 +181,12 @@ def cmd_deploy(args) -> int:
         except subprocess.CalledProcessError as exc:
             stage(run_id, version, "build", "fail", f"Image build exited with code {exc.returncode}.",
                   previous=previous)
+            return 1
+        except FileNotFoundError as exc:   # docker or kind missing from PATH (common on a fresh Windows shell)
+            tool = Path(exc.filename or "a build tool").name
+            stage(run_id, version, "build", "fail", f"{tool} was not found. Run 'python scripts/cs.py doctor'.",
+                  previous=previous)
+            say(f"{tool} was not found on PATH. Open a new terminal after installing it, then retry.")
             return 1
         stage(run_id, version, "build", "ok", previous=previous)
     else:
