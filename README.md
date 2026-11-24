@@ -1,23 +1,164 @@
+<div align="center">
+
 # LineOfCrowd
 
-**Crowd-crush early warning for big events, built to never go down.**
+### Crowd-crush early warning for big events, built to never go down.
 
-Cameras watch the crowd at Mysuru Dasara. A YOLO model counts people in every zone and works out
-how packed it is (people per m²). When a zone heads toward crush-risk density, the control room
-lights up red, says what to do, and shows where to send people. Every camera runs in its own
-container on Kubernetes, so if one crashes, freezes or gets a bad update, the platform heals it
-in seconds. A safety system that goes offline during a stampede is useless, so that self-healing
-is the point of the project.
+AI cameras count the crowd at Mysuru Dasara, warn the control room before a zone gets dangerous,<br>
+and keep running even when cameras crash, servers die or a bad update ships.
 
+[![CI/CD pipeline](https://github.com/Yojithn/LineOfCrowd/actions/workflows/pipeline.yml/badge.svg)](https://github.com/Yojithn/LineOfCrowd/actions/workflows/pipeline.yml)
+![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![Kubernetes](https://img.shields.io/badge/Kubernetes-kind-326CE5?logo=kubernetes&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-DC382D?logo=redis&logoColor=white)
+![YOLOv8](https://img.shields.io/badge/YOLOv8n-ONNX%20Runtime-005CED?logo=onnx&logoColor=white)
+![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-2088FF?logo=githubactions&logoColor=white)
+![Trivy](https://img.shields.io/badge/Trivy-scanned-1904DA?logo=aqua&logoColor=white)
+
+<img src="docs/media/surge-alert.gif" alt="A crowd surge at the Main gate: the zone goes from calm to orange to red, the map flies to it, a redirect arc appears and an incident opens" width="100%">
+
+<sub>A surge drill at the Main gate: calm → crowded → <b>crush risk</b>. The map flies to the zone, draws where to send people, and opens an incident.</sub>
+
+</div>
+
+---
+
+## Why this exists
+
+Stampedes don't happen out of nowhere. Crowd density creeps up, and at around **4–5 people per m²** a crowd
+stops being able to move on its own. The problem is that nobody watching the cameras notices in time.
+
+LineOfCrowd watches every zone for them. It counts people with a YOLO model, works out **people per m²**,
+forecasts **when** each zone will hit crush risk, and tells the control room exactly what to do.
+
+And because a safety system that goes offline during a stampede is useless, every part of it runs on
+**self-healing Kubernetes**: crashed cameras come back in seconds, a dead server hands its viewers to its twin,
+and a broken release rolls itself back.
+
+## Highlights
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### 🗺️ Live 3D control room
+A 3D map of the Mysuru Palace grounds with a pressure column per zone, live camera feeds,
+a 30-minute forecast and a 15-minute replay strip you can drag back through.
+
+</td>
+<td width="50%"><img src="docs/media/dashboard.jpg" alt="LineOfCrowd control room with 3D map, zone list and camera feeds"></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/media/alert.jpg" alt="Crush risk alert at the Main gate with response steps and an open incident"></td>
+<td width="50%" valign="top">
+
+### 🚨 Alerts that tell you what to do
+When a zone crosses the crush-risk line, the screen goes red, a voice announces it, the map draws a
+**redirect arc** to the calmest nearby zone, and an **incident** opens with Acknowledge → Send volunteers → Resolve.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### 🔍 Drill into any zone
+Click a zone for its live feed, density history, flow direction and counter-flow (an early sign of turbulence),
+forecast, and the actions an operator can take.
+
+</td>
+<td width="50%"><img src="docs/media/drawer.jpg" alt="Zone drawer for Front stage with density, people in view and forecast"></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/media/palette.jpg" alt="Command menu filtered to surge drills"></td>
+<td width="50%" valign="top">
+
+### ⌨️ Keyboard-first
+**Ctrl K** opens a command menu for every action: open a zone, run a surge drill, crash a camera,
+toggle map layers, change danger levels or show the QR code for phones.
+
+</td>
+</tr>
+</table>
+
+### ♻️ Self-healing: delete a camera pod and watch it come back
+
+<img src="docs/media/self-healing.gif" alt="Deleting the food court camera pod from the dashboard: the hexagon shatters and Kubernetes starts a replacement within seconds" width="100%">
+
+<sub>Each camera is its own Kubernetes pod. Delete one from the Cluster panel and the Deployment replaces it in about 3 seconds. The other cameras never stop.</sub>
+
+### 📱 Volunteer phones
+
+<table>
+<tr>
+<td align="center" width="50%"><img src="docs/media/phone.jpg" alt="Volunteer phone page showing Main gate is calm" width="280"><br><sub><b>My zone:</b> one glance at your zone's status, and an <i>I'm on my way</i> button that shows up in the control room</sub></td>
+<td align="center" width="50%"><img src="docs/media/phone-break.jpg" alt="Break it tab with hold to crash buttons for each camera" width="280"><br><sub><b>Break it:</b> judges and visitors press and hold to crash a real camera pod, then watch it heal on the big screen</sub></td>
+</tr>
+</table>
+
+## How it works
+
+```mermaid
+flowchart LR
+    subgraph K8s["Kubernetes cluster (kind)"]
+        direction LR
+        W1["📷 gate worker"]
+        W2["📷 stage worker"]
+        W3["📷 food worker"]
+        W4["📷 exit worker"]
+        API1["API pod 1<br/>FastAPI"]
+        API2["API pod 2<br/>FastAPI"]
+        R[("Redis<br/>shared state")]
+        W1 & W2 & W3 & W4 -- "count + frame<br/>2× per second" --> API1 & API2
+        API1 & API2 <--> R
+    end
+    V["🎥 Crowd videos<br/>or simulated feeds"] --> W1 & W2 & W3 & W4
+    API1 & API2 -- "live stream (SSE)" --> D["🖥️ Control room"]
+    API1 & API2 -- "live stream (SSE)" --> P["📱 Volunteer phones"]
+
+    subgraph CI["GitHub Actions"]
+        direction LR
+        T["✅ Tests"] --> B["🐳 Build + Trivy scan"] --> DEP["🚀 Rolling deploy"]
+    end
+    G["git push"] --> T
+    DEP -- "health checks pass → live<br/>fail → auto-rollback" --> K8s
 ```
- Crowd videos ──► 4 camera workers (YOLOv8n + tracking) ──► API (FastAPI, 2 pods) ◄──► Redis
-                                                             │
-                                  Control-room dashboard ◄───┤  live stream (SSE): 3D map, alarms, incidents, replay
-                                  Volunteer phone page   ◄───┘  zone status, "I'm on my way", hold-to-crash chaos
 
- git push ──► GitHub Actions: tests ─► build + Trivy scan ─► deploy on the laptop runner
-                                                             rolling update ─► health checks ─► live or auto-rollback
+- **One pod per camera.** Each worker runs YOLOv8n (ONNX Runtime, no PyTorch), tracks movement and reports twice a second. If one crashes or freezes, only that camera blinks, and Kubernetes restarts it.
+- **Two API pods** share state through Redis. Kill the one serving your dashboard and the live stream reconnects to the other.
+- **Zero-downtime releases.** A new version must pass its health checks before an old pod is removed. If it never does, the release times out and rolls back on its own.
+
+## Tech stack
+
+| Layer | Tools |
+|---|---|
+| Detection | YOLOv8n exported to ONNX, ONNX Runtime, OpenCV, a motion-predictive tracker and crowd-flow classifier |
+| Backend | Python 3.13, FastAPI, Server-Sent Events, Redis |
+| Frontend | Plain HTML/CSS/JS modules (no build step), deck.gl 3D map |
+| Platform | Docker, Kubernetes (kind), RBAC, liveness/readiness probes, rolling updates |
+| CI/CD and security | GitHub Actions, Trivy image scanning, self-hosted deploy runner, automatic rollback |
+
+## Quick start
+
+```powershell
+# needs Docker Desktop, kind, kubectl and Python 3.13
+$env:WORKER_API_KEY   = python -c "import secrets; print(secrets.token_urlsafe(32))"
+$env:OPERATOR_API_KEY = python -c "import secrets; print(secrets.token_urlsafe(32))"
+$env:PIPELINE_TOKEN   = python -c "import secrets; print(secrets.token_urlsafe(32))"
+$env:APP_ENV = "development"; $env:ENABLE_CHAOS = "1"
+
+python scripts\cs.py up      # creates the cluster, builds images, deploys everything
 ```
+
+Open **http://localhost:8080**, click **Start monitoring**, and press **Shift 1** for a surge drill.
+No Kubernetes? `docker compose up --build` runs the same thing on plain Docker.
+The full step-by-step guide is below.
+
+> The screenshots and GIFs above use the built-in **simulated camera feeds**. Drop real crowd clips into
+> `worker/videos/` and the same pipeline runs YOLO on them instead.
+
+---
 
 ## What's in the folder
 
@@ -34,6 +175,8 @@ is the point of the project.
 | `.github/workflows/pipeline.yml` | CI/CD pipeline |
 
 ---
+
+# Full guide
 
 ## 1. One-time setup on Windows
 
@@ -273,6 +416,12 @@ menu, **Q** QR code, **L** live, **R** reset map, **M** voice on or off, **?** a
 | 3D map is blank | Use Chrome or Edge with hardware acceleration on (Settings → System) |
 | No voice | Click **Start monitoring** first (browsers block sound until a click), then press **M** to toggle voice |
 | GitHub deploy job waits forever | The runner window (`run.cmd`) is closed. Start it again |
+
+## Team
+
+LineOfCrowd was built as a team project for our DevOps expo by
+**[Yojithn](https://github.com/Yojithn)** and **[astronaut-63](https://github.com/astronaut-63)**.
+The commit history shows who built what.
 
 ## Credits
 
