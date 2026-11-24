@@ -3,7 +3,7 @@
 # and listens on every network card so phones on the same Wi-Fi can reach it.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
-name: crowdsentinel
+name: lineofcrowd
 nodes:
   - role: control-plane
     extraPortMappings:

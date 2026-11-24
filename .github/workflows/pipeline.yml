@@ -1,4 +1,4 @@
-name: CrowdSentinel pipeline
+name: LineOfCrowd pipeline
 
 on:
   push:
@@ -41,14 +41,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build images
         run: |
-          docker build -t crowdsentinel-api:ci api
-          docker build -t crowdsentinel-worker:ci worker
+          docker build -t lineofcrowd-api:ci api
+          docker build -t lineofcrowd-worker:ci worker
       - name: Install Trivy
         run: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
       - name: Scan images (report only; change exit-code to 1 to block releases)
         run: |
-          trivy image --severity CRITICAL,HIGH --ignore-unfixed --exit-code 0 crowdsentinel-api:ci
-          trivy image --severity CRITICAL,HIGH --ignore-unfixed --exit-code 0 crowdsentinel-worker:ci
+          trivy image --severity CRITICAL,HIGH --ignore-unfixed --exit-code 0 lineofcrowd-api:ci
+          trivy image --severity CRITICAL,HIGH --ignore-unfixed --exit-code 0 lineofcrowd-worker:ci
 
   deploy:
     name: Release to the Kubernetes cluster
@@ -59,7 +59,7 @@ jobs:
     runs-on: self-hosted   # the laptop running the kind cluster (see README, "Connect GitHub Actions")
     # Only one release at a time touches the cluster. Tests and image scans never wait for it.
     concurrency:
-      group: crowdsentinel-release
+      group: lineofcrowd-release
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4

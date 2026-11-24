@@ -11,7 +11,7 @@ from starlette.exceptions import HTTPException
 from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-logger = logging.getLogger("crowdsentinel.api")
+logger = logging.getLogger("lineofcrowd.api")
 logger.setLevel(logging.INFO)
 logger.propagate = False
 if not logger.handlers:

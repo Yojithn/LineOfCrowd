@@ -1,4 +1,4 @@
-// CrowdSentinel control room: wires the modules together.
+// LineOfCrowd control room: wires the modules together.
 import { store } from "./store.js";
 import { api, connect } from "./api.js";
 import { $, $$, clock, tween } from "./util.js";
@@ -143,7 +143,7 @@ function start() {
   lightBoot(() => {
     $("#boot").classList.add("gone");
     lightUp();
-    speak(`CrowdSentinel online. Watching ${s.cfg.zones.length} zones at ${s.cfg.venue.name}.`);
+    speak(`Line of Crowd online. Watching ${s.cfg.zones.length} zones at ${s.cfg.venue.name}.`);
   });
 }
 

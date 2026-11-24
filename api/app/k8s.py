@@ -6,7 +6,7 @@ import time
 from typing import Optional
 
 _client = None
-_namespace = os.getenv("NAMESPACE", "crowdsentinel")
+_namespace = os.getenv("NAMESPACE", "lineofcrowd")
 _cache: dict = {"ts": 0.0, "pods": []}
 _timeout = (2, 2)
 
@@ -49,7 +49,7 @@ def list_pods(max_age_s: float = 1.0) -> list[dict]:
     if now - _cache["ts"] < max_age_s:
         return _cache["pods"]
     pods = []
-    resp = _api().list_namespaced_pod(_namespace, label_selector="app.kubernetes.io/part-of=crowdsentinel",
+    resp = _api().list_namespaced_pod(_namespace, label_selector="app.kubernetes.io/part-of=lineofcrowd",
                                      _request_timeout=_timeout)
     for p in resp.items:
         labels = p.metadata.labels or {}
@@ -94,7 +94,7 @@ def delete_pod(name: str) -> str:
     pod = _api().read_namespaced_pod(name, _namespace, _request_timeout=_timeout)
     labels = pod.metadata.labels or {}
     role = labels.get("role")
-    if labels.get("app.kubernetes.io/part-of") != "crowdsentinel" or role not in ("worker", "api"):
+    if labels.get("app.kubernetes.io/part-of") != "lineofcrowd" or role not in ("worker", "api"):
         raise PermissionError("Only camera and API pods can be deleted from the dashboard.")
     _api().delete_namespaced_pod(name, _namespace, grace_period_seconds=0 if role == "worker" else 2,
                                 _request_timeout=_timeout)

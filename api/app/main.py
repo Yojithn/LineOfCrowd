@@ -1,4 +1,4 @@
-"""CrowdSentinel API.
+"""LineOfCrowd API.
 
 Collects camera reports, turns them into risk, keeps incidents and a 15-minute replay
 history, streams live state to the control room, and serves the dashboard.
@@ -77,7 +77,7 @@ async def lifespan(app: FastAPI):
         await run_in_threadpool(watcher.join, 3)
 
 
-app = FastAPI(title="CrowdSentinel", version=APP_VERSION, lifespan=lifespan)
+app = FastAPI(title="LineOfCrowd", version=APP_VERSION, lifespan=lifespan)
 app.add_middleware(ApiErrors)
 app.add_exception_handler(RequestValidationError, invalid_request)
 app.add_exception_handler(StarletteHTTPException, http_error)

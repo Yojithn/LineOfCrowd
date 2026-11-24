@@ -1,4 +1,4 @@
-# CrowdSentinel
+# LineOfCrowd
 
 **Crowd-crush early warning for big events, built to never go down.**
 
@@ -57,7 +57,7 @@ Then:
 ```powershell
 python --version
 git --version
-cd path\to\crowdsentinel
+cd path\to\lineofcrowd
 python scripts\cs.py doctor
 ```
 
@@ -188,7 +188,7 @@ Now:
 
 - Every `git push` to `main` runs tests, builds and scans the images, rebuilds them on the
   laptop, and does a rolling update. The dashboard's **Release pipeline** panel lights up stage by stage.
-- **Actions → CrowdSentinel pipeline → Run workflow** lets you release on demand. You can do this
+- **Actions → LineOfCrowd pipeline → Run workflow** lets you release on demand. You can do this
   from your phone's browser too. Tick **broken** to ship a corrupted model on purpose.
 
 ## 5. Expo demo script (about 5 minutes)
@@ -267,7 +267,7 @@ menu, **Q** QR code, **L** live, **R** reset map, **M** voice on or off, **?** a
 | `doctor` says Docker isn't running | Open Docker Desktop and wait for **Engine running** |
 | Port 8080 already in use | `docker compose down`, or close whatever uses 8080 |
 | Pods stuck in `ImagePullBackOff` | Images weren't loaded. Run `python scripts\cs.py up` again |
-| Phones can't open the page | 1) Run `python scripts\cs.py phone` (the laptop's address may have changed) and rescan the QR code. 2) Same Wi-Fi or hotspot for phone and laptop; turn off VPN apps on the phone. 3) Test with a phone that is **joined to** the hotspot, not the phone **sharing** it: the sharing phone often cannot open pages on its own clients. 4) Chrome on iPhone: Settings → Chrome → turn on **Local Network**. 5) In admin PowerShell: `New-NetFirewallRule -DisplayName CrowdSentinel -Direction Inbound -Protocol TCP -LocalPort 8080 -Action Allow` |
+| Phones can't open the page | 1) Run `python scripts\cs.py phone` (the laptop's address may have changed) and rescan the QR code. 2) Same Wi-Fi or hotspot for phone and laptop; turn off VPN apps on the phone. 3) Test with a phone that is **joined to** the hotspot, not the phone **sharing** it: the sharing phone often cannot open pages on its own clients. 4) Chrome on iPhone: Settings → Chrome → turn on **Local Network**. 5) In admin PowerShell: `New-NetFirewallRule -DisplayName LineOfCrowd -Direction Inbound -Protocol TCP -LocalPort 8080 -Action Allow` |
 | Most reliable demo network | Turn on the laptop's own hotspot (Settings → Network → **Mobile hotspot**), join the phones to it, then run `python scripts\cs.py phone`. Phones then reach the laptop at `192.168.137.1` with no router in between |
 | QR code says phones can't open localhost | Run `python scripts\cs.py phone` while connected to the hotspot, or `phone --public-url http://<ip>:8080` |
 | 3D map is blank | Use Chrome or Edge with hardware acceleration on (Settings → System) |

@@ -3,7 +3,7 @@
 
 x-worker: &worker
   build: ./worker
-  image: crowdsentinel-worker:v1
+  image: lineofcrowd-worker:v1
   restart: always
   depends_on: [api]
   healthcheck:
@@ -23,7 +23,7 @@ services:
 
   api:
     build: ./api
-    image: crowdsentinel-api:v1
+    image: lineofcrowd-api:v1
     restart: always
     ports: ["8080:8080"]
     environment:

@@ -1,4 +1,4 @@
-"""CrowdSentinel camera worker: one process per camera.
+"""LineOfCrowd camera worker: one process per camera.
 
 Reads a video (or a simulated feed), counts people with YOLOv8n, tracks how they
 move, and reports to the API about twice a second. It also touches a heartbeat file

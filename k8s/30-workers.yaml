@@ -6,8 +6,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: worker-gate
-  namespace: crowdsentinel
-  labels: { app.kubernetes.io/part-of: crowdsentinel, role: worker, zone: gate }
+  namespace: lineofcrowd
+  labels: { app.kubernetes.io/part-of: lineofcrowd, role: worker, zone: gate }
 spec:
   replicas: 1
   revisionHistoryLimit: 5
@@ -20,12 +20,12 @@ spec:
     matchLabels: { role: worker, zone: gate }
   template:
     metadata:
-      labels: { app.kubernetes.io/part-of: crowdsentinel, role: worker, zone: gate }
+      labels: { app.kubernetes.io/part-of: lineofcrowd, role: worker, zone: gate }
     spec:
       terminationGracePeriodSeconds: 1
       containers:
         - name: camera
-          image: crowdsentinel-worker:v1
+          image: lineofcrowd-worker:v1
           imagePullPolicy: IfNotPresent
           env:
             - { name: ZONE, value: "gate" }
@@ -59,8 +59,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: worker-stage
-  namespace: crowdsentinel
-  labels: { app.kubernetes.io/part-of: crowdsentinel, role: worker, zone: stage }
+  namespace: lineofcrowd
+  labels: { app.kubernetes.io/part-of: lineofcrowd, role: worker, zone: stage }
 spec:
   replicas: 1
   revisionHistoryLimit: 5
@@ -73,12 +73,12 @@ spec:
     matchLabels: { role: worker, zone: stage }
   template:
     metadata:
-      labels: { app.kubernetes.io/part-of: crowdsentinel, role: worker, zone: stage }
+      labels: { app.kubernetes.io/part-of: lineofcrowd, role: worker, zone: stage }
     spec:
       terminationGracePeriodSeconds: 1
       containers:
         - name: camera
-          image: crowdsentinel-worker:v1
+          image: lineofcrowd-worker:v1
           imagePullPolicy: IfNotPresent
           env:
             - { name: ZONE, value: "stage" }
@@ -112,8 +112,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: worker-food
-  namespace: crowdsentinel
-  labels: { app.kubernetes.io/part-of: crowdsentinel, role: worker, zone: food }
+  namespace: lineofcrowd
+  labels: { app.kubernetes.io/part-of: lineofcrowd, role: worker, zone: food }
 spec:
   replicas: 1
   revisionHistoryLimit: 5
@@ -126,12 +126,12 @@ spec:
     matchLabels: { role: worker, zone: food }
   template:
     metadata:
-      labels: { app.kubernetes.io/part-of: crowdsentinel, role: worker, zone: food }
+      labels: { app.kubernetes.io/part-of: lineofcrowd, role: worker, zone: food }
     spec:
       terminationGracePeriodSeconds: 1
       containers:
         - name: camera
-          image: crowdsentinel-worker:v1
+          image: lineofcrowd-worker:v1
           imagePullPolicy: IfNotPresent
           env:
             - { name: ZONE, value: "food" }
@@ -165,8 +165,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: worker-exit
-  namespace: crowdsentinel
-  labels: { app.kubernetes.io/part-of: crowdsentinel, role: worker, zone: exit }
+  namespace: lineofcrowd
+  labels: { app.kubernetes.io/part-of: lineofcrowd, role: worker, zone: exit }
 spec:
   replicas: 1
   revisionHistoryLimit: 5
@@ -179,12 +179,12 @@ spec:
     matchLabels: { role: worker, zone: exit }
   template:
     metadata:
-      labels: { app.kubernetes.io/part-of: crowdsentinel, role: worker, zone: exit }
+      labels: { app.kubernetes.io/part-of: lineofcrowd, role: worker, zone: exit }
     spec:
       terminationGracePeriodSeconds: 1
       containers:
         - name: camera
-          image: crowdsentinel-worker:v1
+          image: lineofcrowd-worker:v1
           imagePullPolicy: IfNotPresent
           env:
             - { name: ZONE, value: "exit" }

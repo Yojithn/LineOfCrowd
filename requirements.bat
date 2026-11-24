@@ -19,7 +19,7 @@ if %errorlevel% equ 0 (
 )
 
 if not exist "%VENV_DIR%\Scripts\python.exe" (
-    echo Creating the CrowdSentinel virtual environment...
+    echo Creating the LineOfCrowd virtual environment...
     %PYTHON% -m venv "%VENV_DIR%"
     if errorlevel 1 goto :failed
 )
@@ -37,7 +37,7 @@ echo Installing worker requirements...
 if errorlevel 1 goto :failed
 
 echo.
-echo CrowdSentinel requirements installed successfully.
+echo LineOfCrowd requirements installed successfully.
 echo Virtual environment: %VENV_DIR%
 echo Activate it in PowerShell with:
 echo .\.venv\Scripts\Activate.ps1

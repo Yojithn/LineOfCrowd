@@ -1,4 +1,4 @@
-"""CrowdSentinel helper. Works the same on Windows, macOS and Linux. Needs only Python.
+"""LineOfCrowd helper. Works the same on Windows, macOS and Linux. Needs only Python.
 
   python scripts/cs.py doctor                 check that Docker, kind and kubectl are ready
   python scripts/cs.py up                     create the cluster, build, load and start everything
@@ -26,8 +26,8 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CLUSTER = "crowdsentinel"
-NS = "crowdsentinel"
+CLUSTER = "lineofcrowd"
+NS = "lineofcrowd"
 WORKERS = ["worker-gate", "worker-stage", "worker-food", "worker-exit"]
 API_URL = "http://localhost:8080"
 
@@ -90,7 +90,7 @@ def short_version(v: str) -> str:
 
 def build_and_load(tag: str) -> None:
     for name in ("api", "worker"):
-        image = f"crowdsentinel-{name}:{tag}"
+        image = f"lineofcrowd-{name}:{tag}"
         run(["docker", "build", "-t", image, str(ROOT / name)])
         run(["kind", "load", "docker-image", image, "--name", CLUSTER])
 
@@ -158,7 +158,7 @@ def cmd_up(args) -> int:
     for d in ["redis", "api", *WORKERS]:
         kubectl("rollout", "status", f"deploy/{d}", "--timeout=180s")
     kubectl("get", "pods", "-o", "wide")
-    say("CrowdSentinel is running")
+    say("LineOfCrowd is running")
     print(f"  Dashboard on this laptop:  {API_URL}")
     print(f"  Phones on the same Wi-Fi:  {public}/m")
     print(f"  Operator sign-in:          {API_URL}/api/operator?next=/   (user: operator, password: OPERATOR_API_KEY)")
@@ -196,8 +196,8 @@ def cmd_deploy(args) -> int:
     stage(run_id, version, "deploy", "running", previous=previous)
     env = [f"APP_VERSION={version}", f"BROKEN={'1' if args.broken else '0'}"]
     if args.build:
-        kubectl("set", "image", *[f"deploy/{w}" for w in WORKERS], f"camera=crowdsentinel-worker:{version}")
-        kubectl("set", "image", "deploy/api", f"api=crowdsentinel-api:{version}")
+        kubectl("set", "image", *[f"deploy/{w}" for w in WORKERS], f"camera=lineofcrowd-worker:{version}")
+        kubectl("set", "image", "deploy/api", f"api=lineofcrowd-api:{version}")
         kubectl("set", "env", "deploy/api", f"APP_VERSION={version}")
         changed.append("api")
     kubectl("set", "env", *[f"deploy/{w}" for w in WORKERS], *env)
@@ -258,7 +258,7 @@ def cmd_down(_args) -> int:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="CrowdSentinel helper")
+    p = argparse.ArgumentParser(description="LineOfCrowd helper")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("doctor")
     up = sub.add_parser("up")

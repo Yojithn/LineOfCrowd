@@ -57,7 +57,7 @@ def main() -> None:
     operator_key = credential(env, "OPERATOR_API_KEY")
     credential(env, "PIPELINE_TOKEN")
 
-    with tempfile.TemporaryDirectory(prefix="crowdsentinel-") as state, ExitStack() as stack:
+    with tempfile.TemporaryDirectory(prefix="lineofcrowd-") as state, ExitStack() as stack:
         api = start(
             stack,
             ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8080", "--no-access-log"],

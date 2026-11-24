@@ -45,7 +45,7 @@ def require_worker(request: Request) -> None:
 
 def _operator_challenge() -> HTTPException:
     return HTTPException(401, "Operator authentication required. Sign in at /api/operator.",
-                         {"WWW-Authenticate": 'Basic realm="CrowdSentinel operator"', "Cache-Control": "no-store"})
+                         {"WWW-Authenticate": 'Basic realm="LineOfCrowd operator"', "Cache-Control": "no-store"})
 
 
 def _session_signature(expires: str) -> str:
