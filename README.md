@@ -101,28 +101,32 @@ toggle map layers, change danger levels or show the QR code for phones.
 
 ```mermaid
 flowchart LR
-    subgraph K8s["Kubernetes cluster (kind)"]
+    V["🎥 Crowd videos<br/>or simulated feeds"] --> CAM
+
+    subgraph K8s["☸️ Kubernetes cluster"]
         direction LR
-        W1["📷 gate worker"]
-        W2["📷 stage worker"]
-        W3["📷 food worker"]
-        W4["📷 exit worker"]
-        API1["API pod 1<br/>FastAPI"]
-        API2["API pod 2<br/>FastAPI"]
+        subgraph CAM["Camera workers · 1 pod per zone"]
+            direction TB
+            W1["📷 gate"]
+            W2["📷 stage"]
+            W3["📷 food"]
+            W4["📷 exit"]
+        end
+        S{{"api Service"}}
+        A["⚡ 2 API pods<br/>FastAPI"]
         R[("Redis<br/>shared state")]
-        W1 & W2 & W3 & W4 -- "count + frame<br/>2× per second" --> API1 & API2
-        API1 & API2 <--> R
+        CAM -- "count + frame<br/>2× per second" --> S --> A
+        A <--> R
     end
-    V["🎥 Crowd videos<br/>or simulated feeds"] --> W1 & W2 & W3 & W4
-    API1 & API2 -- "live stream (SSE)" --> D["🖥️ Control room"]
-    API1 & API2 -- "live stream (SSE)" --> P["📱 Volunteer phones"]
+
+    A -- "live stream (SSE)" --> D["🖥️ Control room"]
+    A -- "live stream (SSE)" --> P["📱 Volunteer phones"]
 
     subgraph CI["GitHub Actions"]
         direction LR
-        T["✅ Tests"] --> B["🐳 Build + Trivy scan"] --> DEP["🚀 Rolling deploy"]
+        G["git push"] --> T["✅ Tests"] --> B["🐳 Build + Trivy scan"] --> DEP["🚀 Rolling deploy"]
     end
-    G["git push"] --> T
-    DEP -- "health checks pass → live<br/>fail → auto-rollback" --> K8s
+    DEP -- "healthy → live<br/>unhealthy → auto-rollback" --> K8s
 ```
 
 - **One pod per camera.** Each worker runs YOLOv8n (ONNX Runtime, no PyTorch), tracks movement and reports twice a second. If one crashes or freezes, only that camera blinks, and Kubernetes restarts it.
